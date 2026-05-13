@@ -1,0 +1,1472 @@
+blueprint:
+  name: "Beschattung: KNX-Jalousie Gesamtsteuerung JSON-FSM"
+  description: >
+    Ereignisgetriebene Gesamtsteuerung für eine KNX-Jalousie mit:
+    - Pre-Morning-Schließen über Helligkeit
+    - Morgendlichem Tilt/Öffnen je Wochentag
+    - Fenster-Kippstellung
+    - Sonnenstandsabhängiger Tilt-Beschattung
+    - Manuellem Override
+    - Wind- und Regenzuständen
+    - JSON-FSM in genau einem input_text Helper
+
+    Keine langen wait_for_trigger- oder delay-Actions.
+    Rückmelde-Sperrzeiten werden als Zeitstempel im JSON gespeichert.
+
+    JSON Kurzschema:
+    s  = state
+    p  = previous_state
+    n  = next_state
+    a  = last_action
+    tt = target_tilt
+    op = original_position
+    ot = original_tilt
+    ec = external_change
+    iu = ignore_until
+
+  domain: automation
+
+  input:
+    basic_section:
+      name: Grundeinstellungen
+      input:
+        fsm_helper:
+          name: JSON-FSM Helper
+          description: >
+            input_text Helper für den internen Zustand.
+            Empfohlen: maximale Länge 255, Initialwert {"s":"night"}.
+          selector:
+            entity:
+              domain: input_text
+
+        cover_entity:
+          name: KNX-Jalousie / Cover
+          description: Die Jalousie muss Tiltpositionen unterstützen.
+          selector:
+            entity:
+              filter:
+                - domain: cover
+                  supported_features:
+                    - cover.CoverEntityFeature.SET_TILT_POSITION
+
+        window_sensor:
+          name: Fenstersensor
+          description: on = offen, off = geschlossen.
+          selector:
+            entity:
+              domain: binary_sensor
+              device_class: window
+
+        sunshine_sensor:
+          name: Sonnenscheinsensor
+          description: on = direkte Sonne, off = wolkig/trüb.
+          default: binary_sensor.sun_is_shining
+          selector:
+            entity:
+              domain: binary_sensor
+
+        sun_entity:
+          name: Sonnenstand-Entity
+          description: Normalerweise sun.sun.
+          default: sun.sun
+          selector:
+            entity:
+              domain: sun
+
+    pre_morning_section:
+      name: Pre-Morning / Schlafschutz
+      input:
+        brightness_sensor:
+          name: Helligkeitssensor
+          description: Wird nur für den Übergang nach pre_morning verwendet.
+          selector:
+            entity:
+              domain: sensor
+
+        pre_morning_brightness_threshold:
+          name: Helligkeitsschwelle für Pre-Morning
+          description: >
+            Wenn die Helligkeit über diesen Wert steigt, wird pre_morning ausgelöst.
+          default: 5
+          selector:
+            number:
+              min: 0
+              max: 100000
+              step: 1
+              mode: box
+
+        pre_morning_latest_time:
+          name: Spätester Pre-Morning-Zeitpunkt
+          description: Fallback-Zeitpunkt, falls die Helligkeitsschwelle nicht triggert.
+          default: "05:00:00"
+          selector:
+            time:
+
+        pre_morning_close_enabled:
+          name: Im Pre-Morning ganz schließen
+          description: >
+            Wenn aktiviert, wird die Jalousie im Pre-Morning geschlossen.
+          default: true
+          selector:
+            boolean:
+
+        pre_morning_closed_threshold:
+          name: Gilt als geschlossen bis
+          description: >
+            Wenn current_position größer als dieser Wert ist, wird im Pre-Morning geschlossen.
+            0 = geschlossen, 100 = offen.
+          default: 2
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+    morning_section:
+      name: Morgenfunktion
+      input:
+        morning_enabled:
+          name: Morgenfunktion aktivieren
+          default: true
+          selector:
+            boolean:
+
+        morning_operation_mode:
+          name: Morgenaktion
+          default: tilt
+          selector:
+            select:
+              options:
+                - label: "Tilten"
+                  value: tilt
+                - label: "Öffnen"
+                  value: open
+
+        morning_tilt_position:
+          name: Morgendliche Tilt-Position
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        morning_closed_threshold:
+          name: Morgens behandeln bis Position
+          description: >
+            Morgenaktion nur, wenn die Jalousie geschlossen oder fast geschlossen ist.
+            0 = geschlossen, 100 = offen.
+          default: 21
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        workday_sensor:
+          name: Workday-Sensor
+          default: binary_sensor.werktag_heute
+          selector:
+            entity:
+              domain: binary_sensor
+
+        monday_time:
+          name: Montag
+          default: "06:00:00"
+          selector:
+            time:
+
+        tuesday_time:
+          name: Dienstag
+          default: "06:00:00"
+          selector:
+            time:
+
+        wednesday_time:
+          name: Mittwoch
+          default: "06:00:00"
+          selector:
+            time:
+
+        thursday_time:
+          name: Donnerstag
+          default: "06:00:00"
+          selector:
+            time:
+
+        friday_time:
+          name: Freitag
+          default: "06:00:00"
+          selector:
+            time:
+
+        saturday_time:
+          name: Samstag
+          default: "08:30:00"
+          selector:
+            time:
+
+        sunday_time:
+          name: Sonntag / Feiertag
+          default: "08:30:00"
+          selector:
+            time:
+
+    sun_section:
+      name: Sonnenfenster und Sonnen-Tilt
+      input:
+        min_azimuth:
+          name: Minimaler Azimut
+          default: 90
+          selector:
+            number:
+              min: 0
+              max: 360
+              step: 1
+              unit_of_measurement: "°"
+
+        max_azimuth:
+          name: Maximaler Azimut
+          default: 270
+          selector:
+            number:
+              min: 0
+              max: 360
+              step: 1
+              unit_of_measurement: "°"
+
+        min_elevation:
+          name: Minimale Sonnenhöhe
+          default: 5
+          selector:
+            number:
+              min: 0
+              max: 80
+              step: 0.5
+              unit_of_measurement: "°"
+
+        max_elevation:
+          name: Sonnenhöhe für maximalen Tilt
+          default: 60
+          selector:
+            number:
+              min: 10
+              max: 90
+              step: 1
+              unit_of_measurement: "°"
+
+        tilt_min:
+          name: Tilt bei niedriger Sonne
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        tilt_max:
+          name: Tilt bei hoher Sonne
+          default: 40
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        cloudy_tilt:
+          name: Tilt bei wolkig/trüb
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        close_open_cover_for_sun:
+          name: Offene Jalousie für Sonnenbeschattung schließen
+          description: >
+            Wenn aktiviert, wird eine offene Jalousie zuerst geschlossen,
+            bevor der Sonnen-Tilt gesetzt wird.
+          default: false
+          selector:
+            boolean:
+
+        open_position_threshold:
+          name: Offen-Schwelle
+          description: >
+            Wenn current_position größer als dieser Wert ist, gilt die Jalousie als offen.
+          default: 5
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+    window_section:
+      name: Fenster-Kippstellung
+      input:
+        window_tilt_position:
+          name: Fenster-Kippstellung
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        window_closed_threshold:
+          name: Fenster-Kippstellung nur wenn geschlossen bis
+          description: >
+            Fenster-Kippstellung wird nur gesetzt, wenn die Jalousie geschlossen
+            oder fast geschlossen ist.
+          default: 21
+          selector:
+            number:
+              min: 1
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        restore_after_window_close:
+          name: Nach Fensterschluss ursprüngliche Stellung wiederherstellen
+          default: true
+          selector:
+            boolean:
+
+    weather_section:
+      name: Wind und Regen
+      input:
+        wind_sensor:
+          name: Windsensor
+          description: on = Windschutz aktiv.
+          selector:
+            entity:
+              domain: binary_sensor
+
+        wind_action:
+          name: Aktion bei Wind
+          default: open
+          selector:
+            select:
+              options:
+                - label: "Keine Aktion"
+                  value: none
+                - label: "Öffnen"
+                  value: open
+                - label: "Schließen"
+                  value: close
+
+        rain_sensor:
+          name: Regensensor
+          description: on = Regenschutz aktiv.
+          selector:
+            entity:
+              domain: binary_sensor
+
+        rain_action:
+          name: Aktion bei Regen
+          default: none
+          selector:
+            select:
+              options:
+                - label: "Keine Aktion"
+                  value: none
+                - label: "Öffnen"
+                  value: open
+                - label: "Schließen"
+                  value: close
+
+    manual_section:
+      name: Manuelle Erkennung und Rückmeldesperre
+      input:
+        manual_tilt_tolerance:
+          name: Toleranz für manuelle Tilt-Erkennung
+          default: 5
+          selector:
+            number:
+              min: 0
+              max: 20
+              step: 1
+              unit_of_measurement: "%"
+
+        manual_position_tolerance:
+          name: Toleranz für manuelle Positions-Erkennung
+          default: 3
+          selector:
+            number:
+              min: 0
+              max: 20
+              step: 1
+              unit_of_measurement: "%"
+
+        feedback_ignore_seconds:
+          name: Rückmelde-Sperrzeit nach Automatikaktion
+          description: >
+            Wird als ignore_until im JSON gespeichert. Keine delay-Action.
+          default: 30
+          selector:
+            number:
+              min: 0
+              max: 180
+              step: 5
+              unit_of_measurement: "s"
+
+mode: queued
+max: 10
+max_exceeded: silent
+
+trace:
+  stored_traces: 50
+
+variables:
+  fsm_helper: !input fsm_helper
+  cover_entity: !input cover_entity
+  window_sensor: !input window_sensor
+  sunshine_sensor: !input sunshine_sensor
+  sun_entity: !input sun_entity
+  brightness_sensor: !input brightness_sensor
+  wind_sensor: !input wind_sensor
+  rain_sensor: !input rain_sensor
+  workday_sensor: !input workday_sensor
+
+  min_azimuth: !input min_azimuth
+  max_azimuth: !input max_azimuth
+  min_elevation: !input min_elevation
+  max_elevation: !input max_elevation
+  tilt_min: !input tilt_min
+  tilt_max: !input tilt_max
+  cloudy_tilt: !input cloudy_tilt
+
+  pre_morning_close_enabled: !input pre_morning_close_enabled
+  pre_morning_closed_threshold: !input pre_morning_closed_threshold
+
+  morning_enabled: !input morning_enabled
+  morning_operation_mode: !input morning_operation_mode
+  morning_tilt_position: !input morning_tilt_position
+  morning_closed_threshold: !input morning_closed_threshold
+
+  close_open_cover_for_sun: !input close_open_cover_for_sun
+  open_position_threshold: !input open_position_threshold
+
+  window_tilt_position: !input window_tilt_position
+  window_closed_threshold: !input window_closed_threshold
+  restore_after_window_close: !input restore_after_window_close
+
+  wind_action: !input wind_action
+  rain_action: !input rain_action
+
+  manual_tilt_tolerance: !input manual_tilt_tolerance
+  manual_position_tolerance: !input manual_position_tolerance
+  feedback_ignore_seconds: !input feedback_ignore_seconds
+
+  fsm: >
+    {{ states(fsm_helper) | from_json(default={'s': 'night'}) }}
+
+  fsm_state: >
+    {{ (states(fsm_helper) | from_json(default={'s': 'night'})).get('s', 'night') }}
+
+  fsm_previous: >
+    {{ (states(fsm_helper) | from_json(default={})).get('p') }}
+
+  fsm_next: >
+    {{ (states(fsm_helper) | from_json(default={})).get('n') }}
+
+  fsm_action: >
+    {{ (states(fsm_helper) | from_json(default={})).get('a') }}
+
+  fsm_target_tilt: >
+    {{ (states(fsm_helper) | from_json(default={})).get('tt') }}
+
+  fsm_original_position: >
+    {{ (states(fsm_helper) | from_json(default={})).get('op') }}
+
+  fsm_original_tilt: >
+    {{ (states(fsm_helper) | from_json(default={})).get('ot') }}
+
+  fsm_external_change: >
+    {{ (states(fsm_helper) | from_json(default={})).get('ec', false) }}
+
+  fsm_ignore_until: >
+    {{ (states(fsm_helper) | from_json(default={})).get('iu') }}
+
+  ignore_feedback_active: >
+    {{ fsm_state == 'ignore_feedback' }}
+
+  ignore_feedback_expired: >
+    {% if fsm_state != 'ignore_feedback' %}
+      true
+    {% elif fsm_ignore_until in [none, '', 'None', 'none'] %}
+      true
+    {% else %}
+      {{ now() >= as_datetime(fsm_ignore_until) }}
+    {% endif %}
+
+  effective_state: >
+    {% if fsm_state == 'ignore_feedback' and ignore_feedback_expired %}
+      {{ fsm_next | default('night', true) }}
+    {% else %}
+      {{ fsm_state }}
+    {% endif %}
+
+  ignore_until_new: >
+    {{ (as_timestamp(now()) + (feedback_ignore_seconds | int)) | timestamp_local }}
+
+  sun_elevation: "{{ state_attr(sun_entity, 'elevation') | float(-90) }}"
+  sun_azimuth: "{{ state_attr(sun_entity, 'azimuth') | float(0) }}"
+  sunshine_on: "{{ is_state(sunshine_sensor, 'on') }}"
+  window_is_closed: "{{ is_state(window_sensor, 'off') }}"
+  wind_active: "{{ is_state(wind_sensor, 'on') }}"
+  rain_active: "{{ is_state(rain_sensor, 'on') }}"
+
+  current_tilt: "{{ state_attr(cover_entity, 'current_tilt_position') | int(-1) }}"
+  current_position: "{{ state_attr(cover_entity, 'current_position') | int(-1) }}"
+
+  cover_is_closed_for_window: >
+    {{ is_state(cover_entity, 'closed')
+       or (current_position >= 0 and current_position < (window_closed_threshold | int)) }}
+
+  cover_is_closed_for_morning: >
+    {{ current_position >= 0 and current_position <= (morning_closed_threshold | int) }}
+
+  cover_is_open_for_sun: >
+    {{ current_position >= 0 and current_position > (open_position_threshold | int) }}
+
+  sun_in_window: >
+    {{ sun_elevation >= min_elevation
+       and sun_azimuth >= min_azimuth
+       and sun_azimuth <= max_azimuth }}
+
+  calculated_sun_tilt: >
+    {% set e = sun_elevation %}
+    {% set min_e = min_elevation %}
+    {% set max_e = max_elevation %}
+    {% set span = max_e - min_e %}
+    {% if span <= 0 %}
+      {{ tilt_min | int }}
+    {% else %}
+      {% set ratio = ((e - min_e) / span) %}
+      {% set ratio = [0, [ratio, 1] | min] | max %}
+      {{ (tilt_min + ratio * (tilt_max - tilt_min)) | round(0) | int }}
+    {% endif %}
+
+  target_tilt: >
+    {% if sunshine_on %}
+      {{ calculated_sun_tilt | int }}
+    {% else %}
+      {{ cloudy_tilt | int }}
+    {% endif %}
+
+  target_solar_state: >
+    {% if sunshine_on %}
+      sunny_tilt
+    {% else %}
+      cloudy_tilt
+    {% endif %}
+
+  phase_state: >
+    {% if is_state(sun_entity, 'below_horizon') %}
+      night
+    {% elif sun_in_window %}
+      {{ target_solar_state }}
+    {% elif sun_azimuth > max_azimuth %}
+      evening
+    {% else %}
+      waiting_for_sun
+    {% endif %}
+
+  solar_tilt_needed: >
+    {{ current_tilt >= 0
+       and ((current_tilt - (target_tilt | int)) | abs) > (manual_tilt_tolerance | int) }}
+
+  solar_action_needed: >
+    {{ (close_open_cover_for_sun | bool and cover_is_open_for_sun)
+       or solar_tilt_needed }}
+
+triggers:
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+
+  - trigger: sun
+    event: sunset
+    id: sunset
+
+  - trigger: numeric_state
+    entity_id: !input brightness_sensor
+    above: !input pre_morning_brightness_threshold
+    id: pre_morning_brightness
+
+  - trigger: time
+    at: !input pre_morning_latest_time
+    id: pre_morning_time
+
+  - trigger: time
+    at: !input monday_time
+    id: morning_monday
+
+  - trigger: time
+    at: !input tuesday_time
+    id: morning_tuesday
+
+  - trigger: time
+    at: !input wednesday_time
+    id: morning_wednesday
+
+  - trigger: time
+    at: !input thursday_time
+    id: morning_thursday
+
+  - trigger: time
+    at: !input friday_time
+    id: morning_friday
+
+  - trigger: time
+    at: !input saturday_time
+    id: morning_saturday
+
+  - trigger: time
+    at: !input sunday_time
+    id: morning_sunday_or_holiday
+
+  - trigger: state
+    entity_id: !input sun_entity
+    attribute: azimuth
+    id: sun_position_changed
+
+  - trigger: state
+    entity_id: !input sunshine_sensor
+    id: sunshine_changed
+
+  - trigger: state
+    entity_id: !input window_sensor
+    id: window_changed
+
+  - trigger: state
+    entity_id: !input wind_sensor
+    id: wind_changed
+
+  - trigger: state
+    entity_id: !input rain_sensor
+    id: rain_changed
+
+  - trigger: state
+    entity_id: !input cover_entity
+    attribute: current_tilt_position
+    for:
+      seconds: 3
+    id: cover_tilt_changed
+
+  - trigger: state
+    entity_id: !input cover_entity
+    attribute: current_position
+    for:
+      seconds: 3
+    id: cover_position_changed
+
+conditions: []
+
+actions:
+  # Wenn ignore_feedback abgelaufen ist, FSM logisch auf next_state weiterschalten.
+  # Keine Long-Running-Action nötig.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ fsm_state == 'ignore_feedback' and ignore_feedback_expired }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": fsm_next | default('night', true),
+                    "p": "ignore_feedback",
+                    "n": none,
+                    "a": fsm_action,
+                    "tt": fsm_target_tilt,
+                    "op": fsm_original_position,
+                    "ot": fsm_original_tilt,
+                    "ec": fsm_external_change
+                  } | to_json
+                }}
+
+  - choose:
+      ##########################################################################
+      # HA Start: FSM initialisieren / neu bewerten
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: ha_start
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": phase_state,
+                    "p": fsm_state,
+                    "n": none,
+                    "a": "ha_start",
+                    "tt": none,
+                    "op": none,
+                    "ot": none,
+                    "ec": false
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Sonnenuntergang: manuellen Override beenden, Zustand night
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: sunset
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "night",
+                    "p": effective_state,
+                    "n": none,
+                    "a": "sunset",
+                    "tt": none,
+                    "op": none,
+                    "ot": none,
+                    "ec": false
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Wind aktiv
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: wind_changed
+          - condition: template
+            value_template: "{{ wind_active }}"
+          - condition: template
+            value_template: "{{ effective_state != 'windy' }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "windy",
+                    "p": effective_state,
+                    "n": none,
+                    "a": "wind_on",
+                    "tt": fsm_target_tilt,
+                    "op": fsm_original_position,
+                    "ot": fsm_original_tilt,
+                    "ec": fsm_external_change
+                  } | to_json
+                }}
+
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wind_action == 'open' }}"
+                sequence:
+                  - action: cover.open_cover
+                    target:
+                      entity_id: !input cover_entity
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wind_action == 'close' }}"
+                sequence:
+                  - action: cover.close_cover
+                    target:
+                      entity_id: !input cover_entity
+
+      ##########################################################################
+      # Wind vorbei
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: wind_changed
+          - condition: template
+            value_template: "{{ not wind_active }}"
+          - condition: template
+            value_template: "{{ effective_state == 'windy' }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {% set resume =
+                    'window_tilt' if not window_is_closed
+                    else 'rainy' if rain_active
+                    else fsm_previous if fsm_previous == 'manual_override'
+                    else phase_state
+                %}
+                {{
+                  {
+                    "s": resume,
+                    "p": "windy",
+                    "n": none,
+                    "a": "wind_off",
+                    "tt": fsm_target_tilt,
+                    "op": fsm_original_position,
+                    "ot": fsm_original_tilt,
+                    "ec": fsm_external_change
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Regen aktiv, nur wenn kein Wind aktiv ist
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: rain_changed
+          - condition: template
+            value_template: "{{ rain_active }}"
+          - condition: template
+            value_template: "{{ not wind_active }}"
+          - condition: template
+            value_template: "{{ effective_state != 'rainy' }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "rainy",
+                    "p": effective_state,
+                    "n": none,
+                    "a": "rain_on",
+                    "tt": fsm_target_tilt,
+                    "op": fsm_original_position,
+                    "ot": fsm_original_tilt,
+                    "ec": fsm_external_change
+                  } | to_json
+                }}
+
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ rain_action == 'open' }}"
+                sequence:
+                  - action: cover.open_cover
+                    target:
+                      entity_id: !input cover_entity
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ rain_action == 'close' }}"
+                sequence:
+                  - action: cover.close_cover
+                    target:
+                      entity_id: !input cover_entity
+
+      ##########################################################################
+      # Regen vorbei
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: rain_changed
+          - condition: template
+            value_template: "{{ not rain_active }}"
+          - condition: template
+            value_template: "{{ effective_state == 'rainy' }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {% set resume =
+                    'window_tilt' if not window_is_closed
+                    else fsm_previous if fsm_previous == 'manual_override'
+                    else phase_state
+                %}
+                {{
+                  {
+                    "s": resume,
+                    "p": "rainy",
+                    "n": none,
+                    "a": "rain_off",
+                    "tt": fsm_target_tilt,
+                    "op": fsm_original_position,
+                    "ot": fsm_original_tilt,
+                    "ec": fsm_external_change
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Fenster geöffnet
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: window_changed
+          - condition: template
+            value_template: "{{ not window_is_closed }}"
+          - condition: template
+            value_template: "{{ not wind_active }}"
+          - condition: template
+            value_template: "{{ effective_state != 'window_tilt' }}"
+          - condition: template
+            value_template: "{{ cover_is_closed_for_window }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "window_tilt",
+                    "p": effective_state,
+                    "n": none,
+                    "a": "window_open",
+                    "tt": window_tilt_position | int,
+                    "op": current_position if current_position >= 0 else none,
+                    "ot": current_tilt if current_tilt >= 0 else none,
+                    "ec": false
+                  } | to_json
+                }}
+
+          - action: cover.set_cover_tilt_position
+            target:
+              entity_id: !input cover_entity
+            data:
+              tilt_position: "{{ window_tilt_position | int }}"
+
+      ##########################################################################
+      # Fenster geschlossen
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: window_changed
+          - condition: template
+            value_template: "{{ window_is_closed }}"
+          - condition: template
+            value_template: "{{ effective_state == 'window_tilt' }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ restore_after_window_close | bool
+                         and not (fsm_external_change | bool) }}
+                sequence:
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: >
+                              {{ fsm_original_position not in [none, '', 'None', 'none'] }}
+                        sequence:
+                          - action: cover.set_cover_position
+                            target:
+                              entity_id: !input cover_entity
+                            data:
+                              position: "{{ fsm_original_position | int }}"
+
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: >
+                              {{ fsm_original_tilt not in [none, '', 'None', 'none'] }}
+                        sequence:
+                          - action: cover.set_cover_tilt_position
+                            target:
+                              entity_id: !input cover_entity
+                            data:
+                              tilt_position: "{{ fsm_original_tilt | int }}"
+
+                  - action: input_text.set_value
+                    target:
+                      entity_id: !input fsm_helper
+                    data:
+                      value: >
+                        {% set next =
+                            'manual_override' if fsm_previous == 'manual_override'
+                            else phase_state
+                        %}
+                        {{
+                          {
+                            "s": "ignore_feedback",
+                            "p": "window_tilt",
+                            "n": next,
+                            "a": "window_restore",
+                            "tt": none,
+                            "op": none,
+                            "ot": none,
+                            "ec": false,
+                            "iu": ignore_until_new
+                          } | to_json
+                        }}
+
+            default:
+              - action: input_text.set_value
+                target:
+                  entity_id: !input fsm_helper
+                data:
+                  value: >
+                    {% set next =
+                        'manual_override' if fsm_previous == 'manual_override'
+                        else phase_state
+                    %}
+                    {{
+                      {
+                        "s": next,
+                        "p": "window_tilt",
+                        "n": none,
+                        "a": "window_closed_no_restore",
+                        "tt": none,
+                        "op": none,
+                        "ot": none,
+                        "ec": false
+                      } | to_json
+                    }}
+
+      ##########################################################################
+      # Externe Änderung während Fenster offen
+      ##########################################################################
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['cover_tilt_changed', 'cover_position_changed'] }}"
+          - condition: template
+            value_template: "{{ effective_state == 'window_tilt' }}"
+          - condition: template
+            value_template: "{{ not window_is_closed }}"
+          - condition: template
+            value_template: >
+              {% if trigger.id == 'cover_tilt_changed' %}
+                {% set new_tilt = trigger.to_state.attributes.current_tilt_position | int(-1) %}
+                {{ new_tilt >= 0
+                   and ((new_tilt - (window_tilt_position | int)) | abs) > (manual_tilt_tolerance | int) }}
+              {% else %}
+                {% set from_pos = trigger.from_state.attributes.current_position | int(-1) %}
+                {% set to_pos = trigger.to_state.attributes.current_position | int(-1) %}
+                {{ from_pos >= 0
+                   and to_pos >= 0
+                   and ((to_pos - from_pos) | abs) > (manual_position_tolerance | int) }}
+              {% endif %}
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "window_tilt",
+                    "p": fsm_previous,
+                    "n": none,
+                    "a": "window_external_change",
+                    "tt": window_tilt_position | int,
+                    "op": fsm_original_position,
+                    "ot": fsm_original_tilt,
+                    "ec": true
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Pre-Morning durch Helligkeit oder Fallback-Zeit
+      ##########################################################################
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['pre_morning_brightness', 'pre_morning_time'] }}"
+          - condition: template
+            value_template: "{{ not wind_active and not rain_active and window_is_closed }}"
+          - condition: template
+            value_template: "{{ effective_state in ['night', 'evening'] }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ pre_morning_close_enabled | bool
+                         and current_position >= 0
+                         and current_position > (pre_morning_closed_threshold | int) }}
+                sequence:
+                  - action: cover.close_cover
+                    target:
+                      entity_id: !input cover_entity
+
+                  - action: input_text.set_value
+                    target:
+                      entity_id: !input fsm_helper
+                    data:
+                      value: >
+                        {{
+                          {
+                            "s": "ignore_feedback",
+                            "p": effective_state,
+                            "n": "pre_morning",
+                            "a": "pre_morning_close",
+                            "tt": none,
+                            "op": none,
+                            "ot": none,
+                            "ec": false,
+                            "iu": ignore_until_new
+                          } | to_json
+                        }}
+
+            default:
+              - action: input_text.set_value
+                target:
+                  entity_id: !input fsm_helper
+                data:
+                  value: >
+                    {{
+                      {
+                        "s": "pre_morning",
+                        "p": effective_state,
+                        "n": none,
+                        "a": "pre_morning",
+                        "tt": none,
+                        "op": none,
+                        "ot": none,
+                        "ec": false
+                      } | to_json
+                    }}
+
+      ##########################################################################
+      # Morgendliche Aktion je Wochentag
+      ##########################################################################
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ trigger.id in [
+                'morning_monday',
+                'morning_tuesday',
+                'morning_wednesday',
+                'morning_thursday',
+                'morning_friday',
+                'morning_saturday',
+                'morning_sunday_or_holiday'
+              ] }}
+          - condition: template
+            value_template: "{{ morning_enabled | bool }}"
+          - condition: template
+            value_template: "{{ not wind_active and not rain_active and window_is_closed }}"
+          - condition: template
+            value_template: >
+              {{ effective_state in ['night', 'pre_morning', 'evening', 'waiting_for_sun'] }}
+          - condition: template
+            value_template: >
+              {% set weekday = now().isoweekday() %}
+              {% set is_workday = is_state(workday_sensor, 'on') %}
+              {{
+                (trigger.id == 'morning_monday' and weekday == 1 and is_workday)
+                or
+                (trigger.id == 'morning_tuesday' and weekday == 2 and is_workday)
+                or
+                (trigger.id == 'morning_wednesday' and weekday == 3 and is_workday)
+                or
+                (trigger.id == 'morning_thursday' and weekday == 4 and is_workday)
+                or
+                (trigger.id == 'morning_friday' and weekday == 5 and is_workday)
+                or
+                (trigger.id == 'morning_saturday' and weekday == 6)
+                or
+                (
+                  trigger.id == 'morning_sunday_or_holiday'
+                  and (
+                    weekday == 7
+                    or
+                    (weekday in [1, 2, 3, 4, 5] and not is_workday)
+                  )
+                )
+              }}
+          - condition: template
+            value_template: "{{ cover_is_closed_for_morning }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ morning_operation_mode == 'tilt' }}"
+                sequence:
+                  - action: cover.set_cover_tilt_position
+                    target:
+                      entity_id: !input cover_entity
+                    data:
+                      tilt_position: "{{ morning_tilt_position | int }}"
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ morning_operation_mode == 'open' }}"
+                sequence:
+                  - action: cover.open_cover
+                    target:
+                      entity_id: !input cover_entity
+
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "ignore_feedback",
+                    "p": effective_state,
+                    "n": "waiting_for_sun",
+                    "a": "morning_" ~ morning_operation_mode,
+                    "tt": morning_tilt_position | int if morning_operation_mode == 'tilt' else none,
+                    "op": none,
+                    "ot": none,
+                    "ec": false,
+                    "iu": ignore_until_new
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Sonne verlässt das Sonnenfenster: evening, keine Jalousieaktion
+      ##########################################################################
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+          - condition: template
+            value_template: "{{ effective_state in ['sunny_tilt', 'cloudy_tilt'] }}"
+          - condition: template
+            value_template: "{{ not sun_in_window }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "evening",
+                    "p": effective_state,
+                    "n": none,
+                    "a": "sun_left_window",
+                    "tt": fsm_target_tilt,
+                    "op": none,
+                    "ot": none,
+                    "ec": false
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Manuelle KNX-Übersteuerung
+      ##########################################################################
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['cover_tilt_changed', 'cover_position_changed'] }}"
+          - condition: template
+            value_template: >
+              {{ effective_state in ['waiting_for_sun', 'sunny_tilt', 'cloudy_tilt'] }}
+          - condition: template
+            value_template: "{{ window_is_closed and not wind_active and not rain_active }}"
+          - condition: template
+            value_template: "{{ sun_in_window or effective_state == 'waiting_for_sun' }}"
+          - condition: template
+            value_template: >
+              {% if trigger.id == 'cover_tilt_changed' %}
+                {% set new_tilt = trigger.to_state.attributes.current_tilt_position | int(-1) %}
+                {% set reference = fsm_target_tilt | int(target_tilt | int) %}
+                {{ new_tilt >= 0
+                   and ((new_tilt - reference) | abs) > (manual_tilt_tolerance | int)
+                   and ((new_tilt - (target_tilt | int)) | abs) > (manual_tilt_tolerance | int) }}
+              {% elif trigger.id == 'cover_position_changed' %}
+                {% set from_pos = trigger.from_state.attributes.current_position | int(-1) %}
+                {% set to_pos = trigger.to_state.attributes.current_position | int(-1) %}
+                {{ from_pos >= 0
+                   and to_pos >= 0
+                   and ((to_pos - from_pos) | abs) > (manual_position_tolerance | int) }}
+              {% else %}
+                false
+              {% endif %}
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "manual_override",
+                    "p": effective_state,
+                    "n": none,
+                    "a": "manual_override",
+                    "tt": fsm_target_tilt,
+                    "op": none,
+                    "ot": none,
+                    "ec": false
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Closing for Tilt: nach Positionsrückmeldung Tilt setzen
+      ##########################################################################
+      - conditions:
+          - condition: trigger
+            id: cover_position_changed
+          - condition: template
+            value_template: "{{ effective_state == 'closing_for_tilt' }}"
+          - condition: template
+            value_template: "{{ not cover_is_open_for_sun }}"
+          - condition: template
+            value_template: "{{ window_is_closed and not wind_active and not rain_active }}"
+          - condition: template
+            value_template: "{{ sun_in_window }}"
+        sequence:
+          - action: cover.set_cover_tilt_position
+            target:
+              entity_id: !input cover_entity
+            data:
+              tilt_position: "{{ fsm_target_tilt | int(target_tilt | int) }}"
+
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "ignore_feedback",
+                    "p": "closing_for_tilt",
+                    "n": target_solar_state,
+                    "a": "solar_tilt_after_close",
+                    "tt": target_tilt | int,
+                    "op": none,
+                    "ot": none,
+                    "ec": false,
+                    "iu": ignore_until_new
+                  } | to_json
+                }}
+
+      ##########################################################################
+      # Sonnenstandsabhängige Beschattung
+      ##########################################################################
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+          - condition: template
+            value_template: >
+              {{ effective_state in [
+                'pre_morning',
+                'morning_tilt',
+                'waiting_for_sun',
+                'sunny_tilt',
+                'cloudy_tilt',
+                'evening'
+              ] }}
+          - condition: template
+            value_template: "{{ window_is_closed and not wind_active and not rain_active }}"
+          - condition: template
+            value_template: "{{ sun_in_window }}"
+          - condition: template
+            value_template: "{{ solar_action_needed }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ close_open_cover_for_sun | bool and cover_is_open_for_sun }}
+                sequence:
+                  - action: cover.close_cover
+                    target:
+                      entity_id: !input cover_entity
+
+                  - action: input_text.set_value
+                    target:
+                      entity_id: !input fsm_helper
+                    data:
+                      value: >
+                        {{
+                          {
+                            "s": "closing_for_tilt",
+                            "p": effective_state,
+                            "n": target_solar_state,
+                            "a": "solar_close_for_tilt",
+                            "tt": target_tilt | int,
+                            "op": none,
+                            "ot": none,
+                            "ec": false
+                          } | to_json
+                        }}
+
+            default:
+              - action: cover.set_cover_tilt_position
+                target:
+                  entity_id: !input cover_entity
+                data:
+                  tilt_position: "{{ target_tilt | int }}"
+
+              - action: input_text.set_value
+                target:
+                  entity_id: !input fsm_helper
+                data:
+                  value: >
+                    {{
+                      {
+                        "s": "ignore_feedback",
+                        "p": effective_state,
+                        "n": target_solar_state,
+                        "a": "solar_tilt",
+                        "tt": target_tilt | int,
+                        "op": none,
+                        "ot": none,
+                        "ec": false,
+                        "iu": ignore_until_new
+                      } | to_json
+                    }}
+
+      ##########################################################################
+      # Sonnenfenster erreicht, aber keine Aktion nötig:
+      # State trotzdem korrekt setzen
+      ##########################################################################
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+          - condition: template
+            value_template: >
+              {{ effective_state in [
+                'pre_morning',
+                'morning_tilt',
+                'waiting_for_sun',
+                'evening',
+                'sunny_tilt',
+                'cloudy_tilt'
+              ] }}
+          - condition: template
+            value_template: "{{ window_is_closed and not wind_active and not rain_active }}"
+          - condition: template
+            value_template: "{{ sun_in_window }}"
+          - condition: template
+            value_template: "{{ not solar_action_needed }}"
+          - condition: template
+            value_template: "{{ effective_state != target_solar_state }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": target_solar_state,
+                    "p": effective_state,
+                    "n": none,
+                    "a": "solar_state_only",
+                    "tt": target_tilt | int,
+                    "op": none,
+                    "ot": none,
+                    "ec": false
+                  } | to_json
+                }}
