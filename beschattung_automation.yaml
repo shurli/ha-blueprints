@@ -23,6 +23,7 @@ blueprint:
     ot = original_tilt
     ec = external_change
     iu = ignore_until
+    ab = azimuth_bucket
 
   domain: automation
 
@@ -73,12 +74,42 @@ blueprint:
             entity:
               domain: sun
 
+    position_thresholds_section:
+      name: Positionsschwellen
+      input:
+        closed_position_threshold:
+          name: Geschlossen-Schwelle
+          description: >
+            Bis zu diesem Wert gilt die Jalousie als geschlossen oder fast geschlossen.
+            Bei Home Assistant bedeutet meist 0 = geschlossen und 100 = offen.
+          default: 21
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
+        open_position_threshold:
+          name: Offen-Schwelle
+          description: >
+            Ab diesem Wert gilt die Jalousie als offen.
+            Bei Home Assistant bedeutet meist 0 = geschlossen und 100 = offen.
+          default: 80
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+
     pre_morning_section:
       name: Pre-Morning / Schlafschutz
       input:
         brightness_sensor:
           name: Helligkeitssensor
           description: Wird nur für den Übergang nach pre_morning verwendet.
+          default: sensor.d3_maximale_helligkeit
           selector:
             entity:
               domain: sensor
@@ -110,19 +141,6 @@ blueprint:
           selector:
             boolean:
 
-        pre_morning_closed_threshold:
-          name: Gilt als geschlossen bis
-          description: >
-            Wenn current_position größer als dieser Wert ist, wird im Pre-Morning geschlossen.
-            0 = geschlossen, 100 = offen.
-          default: 2
-          selector:
-            number:
-              min: 0
-              max: 100
-              step: 1
-              unit_of_measurement: "%"
-
     morning_section:
       name: Morgenfunktion
       input:
@@ -146,19 +164,6 @@ blueprint:
         morning_tilt_position:
           name: Morgendliche Tilt-Position
           default: 50
-          selector:
-            number:
-              min: 0
-              max: 100
-              step: 1
-              unit_of_measurement: "%"
-
-        morning_closed_threshold:
-          name: Morgens behandeln bis Position
-          description: >
-            Morgenaktion nur, wenn die Jalousie geschlossen oder fast geschlossen ist.
-            0 = geschlossen, 100 = offen.
-          default: 21
           selector:
             number:
               min: 0
@@ -220,7 +225,7 @@ blueprint:
       input:
         min_azimuth:
           name: Minimaler Azimut
-          default: 90
+          default: 95
           selector:
             number:
               min: 0
@@ -230,7 +235,7 @@ blueprint:
 
         max_azimuth:
           name: Maximaler Azimut
-          default: 270
+          default: 275
           selector:
             number:
               min: 0
@@ -258,6 +263,19 @@ blueprint:
               step: 1
               unit_of_measurement: "°"
 
+        sun_azimuth_trigger_step:
+          name: Sonnenstands-Trigger Schrittweite
+          description: >
+            Die Sonnenlogik wird nur ausgeführt, wenn der Azimut in einen neuen
+            Bereich wechselt. 5° reduziert die Auswertung deutlich.
+          default: 5
+          selector:
+            number:
+              min: 1
+              max: 30
+              step: 1
+              unit_of_measurement: "°"
+
         tilt_min:
           name: Tilt bei niedriger Sonne
           default: 0
@@ -270,7 +288,7 @@ blueprint:
 
         tilt_max:
           name: Tilt bei hoher Sonne
-          default: 40
+          default: 35
           selector:
             number:
               min: 0
@@ -293,21 +311,9 @@ blueprint:
           description: >
             Wenn aktiviert, wird eine offene Jalousie zuerst geschlossen,
             bevor der Sonnen-Tilt gesetzt wird.
-          default: false
+          default: true
           selector:
             boolean:
-
-        open_position_threshold:
-          name: Offen-Schwelle
-          description: >
-            Wenn current_position größer als dieser Wert ist, gilt die Jalousie als offen.
-          default: 5
-          selector:
-            number:
-              min: 0
-              max: 100
-              step: 1
-              unit_of_measurement: "%"
 
     window_section:
       name: Fenster-Kippstellung
@@ -318,19 +324,6 @@ blueprint:
           selector:
             number:
               min: 0
-              max: 100
-              step: 1
-              unit_of_measurement: "%"
-
-        window_closed_threshold:
-          name: Fenster-Kippstellung nur wenn geschlossen bis
-          description: >
-            Fenster-Kippstellung wird nur gesetzt, wenn die Jalousie geschlossen
-            oder fast geschlossen ist.
-          default: 21
-          selector:
-            number:
-              min: 1
               max: 100
               step: 1
               unit_of_measurement: "%"
@@ -347,6 +340,7 @@ blueprint:
         wind_sensor:
           name: Windsensor
           description: on = Windschutz aktiv.
+          default: binary_sensor.d3_wetterstation_mdt_windalarm_40km_h
           selector:
             entity:
               domain: binary_sensor
@@ -367,6 +361,7 @@ blueprint:
         rain_sensor:
           name: Regensensor
           description: on = Regenschutz aktiv.
+          default: binary_sensor.d3_wetterstation_gira_niederschlag
           selector:
             entity:
               domain: binary_sensor
@@ -399,7 +394,7 @@ blueprint:
 
         manual_position_tolerance:
           name: Toleranz für manuelle Positions-Erkennung
-          default: 3
+          default: 5
           selector:
             number:
               min: 0
@@ -411,7 +406,7 @@ blueprint:
           name: Rückmelde-Sperrzeit nach Automatikaktion
           description: >
             Wird als ignore_until im JSON gespeichert. Keine delay-Action.
-          default: 30
+          default: 60
           selector:
             number:
               min: 0
@@ -437,27 +432,27 @@ variables:
   rain_sensor: !input rain_sensor
   workday_sensor: !input workday_sensor
 
+  closed_position_threshold: !input closed_position_threshold
+  open_position_threshold: !input open_position_threshold
+
   min_azimuth: !input min_azimuth
   max_azimuth: !input max_azimuth
   min_elevation: !input min_elevation
   max_elevation: !input max_elevation
+  sun_azimuth_trigger_step: !input sun_azimuth_trigger_step
   tilt_min: !input tilt_min
   tilt_max: !input tilt_max
   cloudy_tilt: !input cloudy_tilt
 
   pre_morning_close_enabled: !input pre_morning_close_enabled
-  pre_morning_closed_threshold: !input pre_morning_closed_threshold
 
   morning_enabled: !input morning_enabled
   morning_operation_mode: !input morning_operation_mode
   morning_tilt_position: !input morning_tilt_position
-  morning_closed_threshold: !input morning_closed_threshold
 
   close_open_cover_for_sun: !input close_open_cover_for_sun
-  open_position_threshold: !input open_position_threshold
 
   window_tilt_position: !input window_tilt_position
-  window_closed_threshold: !input window_closed_threshold
   restore_after_window_close: !input restore_after_window_close
 
   wind_action: !input wind_action
@@ -466,9 +461,6 @@ variables:
   manual_tilt_tolerance: !input manual_tilt_tolerance
   manual_position_tolerance: !input manual_position_tolerance
   feedback_ignore_seconds: !input feedback_ignore_seconds
-
-  fsm: >
-    {{ states(fsm_helper) | from_json(default={'s': 'night'}) }}
 
   fsm_state: >
     {{ (states(fsm_helper) | from_json(default={'s': 'night'})).get('s', 'night') }}
@@ -497,8 +489,8 @@ variables:
   fsm_ignore_until: >
     {{ (states(fsm_helper) | from_json(default={})).get('iu') }}
 
-  ignore_feedback_active: >
-    {{ fsm_state == 'ignore_feedback' }}
+  fsm_azimuth_bucket: >
+    {{ (states(fsm_helper) | from_json(default={})).get('ab') }}
 
   ignore_feedback_expired: >
     {% if fsm_state != 'ignore_feedback' %}
@@ -529,20 +521,33 @@ variables:
   current_tilt: "{{ state_attr(cover_entity, 'current_tilt_position') | int(-1) }}"
   current_position: "{{ state_attr(cover_entity, 'current_position') | int(-1) }}"
 
-  cover_is_closed_for_window: >
+  cover_is_closed: >
     {{ is_state(cover_entity, 'closed')
-       or (current_position >= 0 and current_position < (window_closed_threshold | int)) }}
+       or (current_position >= 0
+           and current_position <= (closed_position_threshold | int)) }}
 
-  cover_is_closed_for_morning: >
-    {{ current_position >= 0 and current_position <= (morning_closed_threshold | int) }}
+  cover_is_open: >
+    {{ is_state(cover_entity, 'open')
+       or (current_position >= 0
+           and current_position >= (open_position_threshold | int)) }}
 
-  cover_is_open_for_sun: >
-    {{ current_position >= 0 and current_position > (open_position_threshold | int) }}
+  cover_is_between: >
+    {{ current_position >= 0
+       and current_position > (closed_position_threshold | int)
+       and current_position < (open_position_threshold | int) }}
 
   sun_in_window: >
     {{ sun_elevation >= min_elevation
        and sun_azimuth >= min_azimuth
        and sun_azimuth <= max_azimuth }}
+
+  current_azimuth_bucket: >
+    {% set step = [sun_azimuth_trigger_step | int(5), 1] | max %}
+    {{ (sun_azimuth / step) | int }}
+
+  azimuth_bucket_changed: >
+    {{ fsm_azimuth_bucket in [none, '', 'None', 'none']
+       or (fsm_azimuth_bucket | int(-999)) != (current_azimuth_bucket | int) }}
 
   calculated_sun_tilt: >
     {% set e = sun_elevation %}
@@ -587,7 +592,7 @@ variables:
        and ((current_tilt - (target_tilt | int)) | abs) > (manual_tilt_tolerance | int) }}
 
   solar_action_needed: >
-    {{ (close_open_cover_for_sun | bool and cover_is_open_for_sun)
+    {{ (close_open_cover_for_sun | bool and cover_is_open)
        or solar_tilt_needed }}
 
 triggers:
@@ -674,8 +679,7 @@ triggers:
 conditions: []
 
 actions:
-  # Wenn ignore_feedback abgelaufen ist, FSM logisch auf next_state weiterschalten.
-  # Keine Long-Running-Action nötig.
+  # Abgelaufenen ignore_feedback-State ohne delay logisch weiterschalten.
   - choose:
       - conditions:
           - condition: template
@@ -695,13 +699,14 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change
+                    "ec": fsm_external_change,
+                    "ab": fsm_azimuth_bucket
                   } | to_json
                 }}
 
   - choose:
       ##########################################################################
-      # HA Start: FSM initialisieren / neu bewerten
+      # HA Start
       ##########################################################################
       - conditions:
           - condition: trigger
@@ -721,12 +726,13 @@ actions:
                     "tt": none,
                     "op": none,
                     "ot": none,
-                    "ec": false
+                    "ec": false,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
 
       ##########################################################################
-      # Sonnenuntergang: manuellen Override beenden, Zustand night
+      # Sonnenuntergang
       ##########################################################################
       - conditions:
           - condition: trigger
@@ -746,7 +752,8 @@ actions:
                     "tt": none,
                     "op": none,
                     "ot": none,
-                    "ec": false
+                    "ec": false,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
 
@@ -775,7 +782,8 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change
+                    "ec": fsm_external_change,
+                    "ab": fsm_azimuth_bucket
                   } | to_json
                 }}
 
@@ -827,12 +835,13 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change
+                    "ec": fsm_external_change,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
 
       ##########################################################################
-      # Regen aktiv, nur wenn kein Wind aktiv ist
+      # Regen aktiv
       ##########################################################################
       - conditions:
           - condition: trigger
@@ -858,7 +867,8 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change
+                    "ec": fsm_external_change,
+                    "ab": fsm_azimuth_bucket
                   } | to_json
                 }}
 
@@ -909,7 +919,8 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change
+                    "ec": fsm_external_change,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
 
@@ -926,7 +937,7 @@ actions:
           - condition: template
             value_template: "{{ effective_state != 'window_tilt' }}"
           - condition: template
-            value_template: "{{ cover_is_closed_for_window }}"
+            value_template: "{{ cover_is_closed }}"
         sequence:
           - action: input_text.set_value
             target:
@@ -942,7 +953,8 @@ actions:
                     "tt": window_tilt_position | int,
                     "op": current_position if current_position >= 0 else none,
                     "ot": current_tilt if current_tilt >= 0 else none,
-                    "ec": false
+                    "ec": false,
+                    "ab": fsm_azimuth_bucket
                   } | to_json
                 }}
 
@@ -1013,7 +1025,8 @@ actions:
                             "op": none,
                             "ot": none,
                             "ec": false,
-                            "iu": ignore_until_new
+                            "iu": ignore_until_new,
+                            "ab": current_azimuth_bucket | int
                           } | to_json
                         }}
 
@@ -1036,7 +1049,8 @@ actions:
                         "tt": none,
                         "op": none,
                         "ot": none,
-                        "ec": false
+                        "ec": false,
+                        "ab": current_azimuth_bucket | int
                       } | to_json
                     }}
 
@@ -1078,12 +1092,13 @@ actions:
                     "tt": window_tilt_position | int,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": true
+                    "ec": true,
+                    "ab": fsm_azimuth_bucket
                   } | to_json
                 }}
 
       ##########################################################################
-      # Pre-Morning durch Helligkeit oder Fallback-Zeit
+      # Pre-Morning
       ##########################################################################
       - conditions:
           - condition: template
@@ -1098,8 +1113,7 @@ actions:
                   - condition: template
                     value_template: >
                       {{ pre_morning_close_enabled | bool
-                         and current_position >= 0
-                         and current_position > (pre_morning_closed_threshold | int) }}
+                         and not cover_is_closed }}
                 sequence:
                   - action: cover.close_cover
                     target:
@@ -1120,7 +1134,8 @@ actions:
                             "op": none,
                             "ot": none,
                             "ec": false,
-                            "iu": ignore_until_new
+                            "iu": ignore_until_new,
+                            "ab": current_azimuth_bucket | int
                           } | to_json
                         }}
 
@@ -1139,12 +1154,13 @@ actions:
                         "tt": none,
                         "op": none,
                         "ot": none,
-                        "ec": false
+                        "ec": false,
+                        "ab": current_azimuth_bucket | int
                       } | to_json
                     }}
 
       ##########################################################################
-      # Morgendliche Aktion je Wochentag
+      # Morgendliche Aktion
       ##########################################################################
       - conditions:
           - condition: template
@@ -1192,7 +1208,7 @@ actions:
                 )
               }}
           - condition: template
-            value_template: "{{ cover_is_closed_for_morning }}"
+            value_template: "{{ cover_is_closed }}"
         sequence:
           - choose:
               - conditions:
@@ -1228,16 +1244,20 @@ actions:
                     "op": none,
                     "ot": none,
                     "ec": false,
-                    "iu": ignore_until_new
+                    "iu": ignore_until_new,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
 
       ##########################################################################
-      # Sonne verlässt das Sonnenfenster: evening, keine Jalousieaktion
+      # Sonne verlässt Sonnenfenster
       ##########################################################################
       - conditions:
           - condition: template
             value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+          - condition: template
+            value_template: >
+              {{ trigger.id != 'sun_position_changed' or azimuth_bucket_changed }}
           - condition: template
             value_template: "{{ effective_state in ['sunny_tilt', 'cloudy_tilt'] }}"
           - condition: template
@@ -1257,7 +1277,8 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": none,
                     "ot": none,
-                    "ec": false
+                    "ec": false,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
 
@@ -1306,7 +1327,8 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": none,
                     "ot": none,
-                    "ec": false
+                    "ec": false,
+                    "ab": fsm_azimuth_bucket
                   } | to_json
                 }}
 
@@ -1319,7 +1341,7 @@ actions:
           - condition: template
             value_template: "{{ effective_state == 'closing_for_tilt' }}"
           - condition: template
-            value_template: "{{ not cover_is_open_for_sun }}"
+            value_template: "{{ not cover_is_open }}"
           - condition: template
             value_template: "{{ window_is_closed and not wind_active and not rain_active }}"
           - condition: template
@@ -1346,7 +1368,8 @@ actions:
                     "op": none,
                     "ot": none,
                     "ec": false,
-                    "iu": ignore_until_new
+                    "iu": ignore_until_new,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
 
@@ -1356,6 +1379,9 @@ actions:
       - conditions:
           - condition: template
             value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+          - condition: template
+            value_template: >
+              {{ trigger.id != 'sun_position_changed' or azimuth_bucket_changed }}
           - condition: template
             value_template: >
               {{ effective_state in [
@@ -1377,7 +1403,7 @@ actions:
               - conditions:
                   - condition: template
                     value_template: >
-                      {{ close_open_cover_for_sun | bool and cover_is_open_for_sun }}
+                      {{ close_open_cover_for_sun | bool and cover_is_open }}
                 sequence:
                   - action: cover.close_cover
                     target:
@@ -1397,7 +1423,8 @@ actions:
                             "tt": target_tilt | int,
                             "op": none,
                             "ot": none,
-                            "ec": false
+                            "ec": false,
+                            "ab": current_azimuth_bucket | int
                           } | to_json
                         }}
 
@@ -1423,7 +1450,8 @@ actions:
                         "op": none,
                         "ot": none,
                         "ec": false,
-                        "iu": ignore_until_new
+                        "iu": ignore_until_new,
+                        "ab": current_azimuth_bucket | int
                       } | to_json
                     }}
 
@@ -1434,6 +1462,9 @@ actions:
       - conditions:
           - condition: template
             value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+          - condition: template
+            value_template: >
+              {{ trigger.id != 'sun_position_changed' or azimuth_bucket_changed }}
           - condition: template
             value_template: >
               {{ effective_state in [
@@ -1467,6 +1498,7 @@ actions:
                     "tt": target_tilt | int,
                     "op": none,
                     "ot": none,
-                    "ec": false
+                    "ec": false,
+                    "ab": current_azimuth_bucket | int
                   } | to_json
                 }}
