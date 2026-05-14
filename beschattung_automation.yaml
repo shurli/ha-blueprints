@@ -23,7 +23,6 @@ blueprint:
     ot = original_tilt
     ec = external_change
     iu = ignore_until
-    ab = azimuth_bucket
 
   domain: automation
 
@@ -225,6 +224,10 @@ blueprint:
       input:
         min_azimuth:
           name: Minimaler Azimut
+          description: >
+            Ab welchem Sonnen-Azimut beschattet werden soll.
+            Für Wrap-Around über Norden kann min_azimuth größer als max_azimuth sein,
+            z. B. 300 bis 60.
           default: 95
           selector:
             number:
@@ -235,6 +238,9 @@ blueprint:
 
         max_azimuth:
           name: Maximaler Azimut
+          description: >
+            Bis zu welchem Sonnen-Azimut beschattet werden soll.
+            Für Wrap-Around über Norden kann max_azimuth kleiner als min_azimuth sein.
           default: 275
           selector:
             number:
@@ -260,19 +266,6 @@ blueprint:
             number:
               min: 10
               max: 90
-              step: 1
-              unit_of_measurement: "°"
-
-        sun_azimuth_trigger_step:
-          name: Sonnenstands-Trigger Schrittweite
-          description: >
-            Die Sonnenlogik wird nur ausgeführt, wenn der Azimut in einen neuen
-            Bereich wechselt. 5° reduziert die Auswertung deutlich.
-          default: 5
-          selector:
-            number:
-              min: 1
-              max: 30
               step: 1
               unit_of_measurement: "°"
 
@@ -454,7 +447,6 @@ variables:
   max_azimuth: !input max_azimuth
   min_elevation: !input min_elevation
   max_elevation: !input max_elevation
-  sun_azimuth_trigger_step: !input sun_azimuth_trigger_step
   tilt_min: !input tilt_min
   tilt_max: !input tilt_max
   cloudy_tilt: !input cloudy_tilt
@@ -505,9 +497,6 @@ variables:
   fsm_ignore_until: >
     {{ (states(fsm_helper) | from_json(default={})).get('iu') }}
 
-  fsm_azimuth_bucket: >
-    {{ (states(fsm_helper) | from_json(default={})).get('ab') }}
-
   ignore_feedback_expired: >
     {% if fsm_state != 'ignore_feedback' %}
       true
@@ -557,20 +546,11 @@ variables:
     {% set min_az = min_azimuth | float(0) %}
     {% set max_az = max_azimuth | float(0) %}
     {% set elevation_ok = sun_elevation >= min_elevation %}
-
     {% if min_az <= max_az %}
       {{ elevation_ok and az >= min_az and az <= max_az }}
     {% else %}
       {{ elevation_ok and (az >= min_az or az <= max_az) }}
     {% endif %}
-
-  current_azimuth_bucket: >
-    {% set step = [sun_azimuth_trigger_step | int(5), 1] | max %}
-    {{ (sun_azimuth / step) | int }}
-
-  azimuth_bucket_changed: >
-    {{ fsm_azimuth_bucket in [none, '', 'None', 'none']
-       or (fsm_azimuth_bucket | int(-999)) != (current_azimuth_bucket | int) }}
 
   calculated_sun_tilt: >
     {% set e = sun_elevation %}
@@ -604,7 +584,9 @@ variables:
       night
     {% elif sun_in_window %}
       {{ target_solar_state }}
-    {% elif sun_azimuth > max_azimuth %}
+    {% elif sun_azimuth > max_azimuth and min_azimuth <= max_azimuth %}
+      evening
+    {% elif min_azimuth > max_azimuth and sun_elevation < min_elevation and is_state(sun_entity, 'above_horizon') %}
       evening
     {% else %}
       waiting_for_sun
@@ -668,10 +650,78 @@ triggers:
     at: !input sunday_time
     id: morning_sunday_or_holiday
 
-  - trigger: state
-    entity_id: !input sun_entity
-    attribute: azimuth
-    id: sun_position_changed
+  - trigger: time
+    at:
+      - "05:00:00"
+      - "05:15:00"
+      - "05:30:00"
+      - "05:45:00"
+      - "06:00:00"
+      - "06:15:00"
+      - "06:30:00"
+      - "06:45:00"
+      - "07:00:00"
+      - "07:15:00"
+      - "07:30:00"
+      - "07:45:00"
+      - "08:00:00"
+      - "08:15:00"
+      - "08:30:00"
+      - "08:45:00"
+      - "09:00:00"
+      - "09:15:00"
+      - "09:30:00"
+      - "09:45:00"
+      - "10:00:00"
+      - "10:15:00"
+      - "10:30:00"
+      - "10:45:00"
+      - "11:00:00"
+      - "11:15:00"
+      - "11:30:00"
+      - "11:45:00"
+      - "12:00:00"
+      - "12:15:00"
+      - "12:30:00"
+      - "12:45:00"
+      - "13:00:00"
+      - "13:15:00"
+      - "13:30:00"
+      - "13:45:00"
+      - "14:00:00"
+      - "14:15:00"
+      - "14:30:00"
+      - "14:45:00"
+      - "15:00:00"
+      - "15:15:00"
+      - "15:30:00"
+      - "15:45:00"
+      - "16:00:00"
+      - "16:15:00"
+      - "16:30:00"
+      - "16:45:00"
+      - "17:00:00"
+      - "17:15:00"
+      - "17:30:00"
+      - "17:45:00"
+      - "18:00:00"
+      - "18:15:00"
+      - "18:30:00"
+      - "18:45:00"
+      - "19:00:00"
+      - "19:15:00"
+      - "19:30:00"
+      - "19:45:00"
+      - "20:00:00"
+      - "20:15:00"
+      - "20:30:00"
+      - "20:45:00"
+      - "21:00:00"
+      - "21:15:00"
+      - "21:30:00"
+      - "21:45:00"
+      - "22:00:00"
+    id: solar_update
 
   - trigger: state
     entity_id: !input sunshine_sensor
@@ -706,7 +756,6 @@ triggers:
 conditions: []
 
 actions:
-  # Abgelaufenen ignore_feedback-State ohne delay logisch weiterschalten.
   - choose:
       - conditions:
           - condition: template
@@ -726,15 +775,11 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change,
-                    "ab": fsm_azimuth_bucket
+                    "ec": fsm_external_change
                   } | to_json
                 }}
 
   - choose:
-      ##########################################################################
-      # HA Start
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: ha_start
@@ -753,14 +798,10 @@ actions:
                     "tt": none,
                     "op": none,
                     "ot": none,
-                    "ec": false,
-                    "ab": current_azimuth_bucket | int
+                    "ec": false
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Sonnenuntergang
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: sunset
@@ -779,14 +820,10 @@ actions:
                     "tt": none,
                     "op": none,
                     "ot": none,
-                    "ec": false,
-                    "ab": current_azimuth_bucket | int
+                    "ec": false
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Wind aktiv
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: wind_changed
@@ -809,8 +846,7 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change,
-                    "ab": fsm_azimuth_bucket
+                    "ec": fsm_external_change
                   } | to_json
                 }}
 
@@ -831,9 +867,6 @@ actions:
                     target:
                       entity_id: !input cover_entity
 
-      ##########################################################################
-      # Wind vorbei
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: wind_changed
@@ -862,15 +895,10 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change,
-                    "ab": current_azimuth_bucket | int
+                    "ec": fsm_external_change
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Regen aktiv
-      # pre_morning hat höhere Priorität als rainy.
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: rain_changed
@@ -897,8 +925,7 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change,
-                    "ab": fsm_azimuth_bucket
+                    "ec": fsm_external_change
                   } | to_json
                 }}
 
@@ -919,9 +946,6 @@ actions:
                     target:
                       entity_id: !input cover_entity
 
-      ##########################################################################
-      # Regen vorbei
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: rain_changed
@@ -949,14 +973,10 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": fsm_external_change,
-                    "ab": current_azimuth_bucket | int
+                    "ec": fsm_external_change
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Fenster geöffnet
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: window_changed
@@ -983,8 +1003,7 @@ actions:
                     "tt": window_tilt_position | int,
                     "op": current_position if current_position >= 0 else none,
                     "ot": current_tilt if current_tilt >= 0 else none,
-                    "ec": false,
-                    "ab": fsm_azimuth_bucket
+                    "ec": false
                   } | to_json
                 }}
 
@@ -994,9 +1013,6 @@ actions:
             data:
               tilt_position: "{{ window_tilt_position | int }}"
 
-      ##########################################################################
-      # Fenster geschlossen
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: window_changed
@@ -1055,8 +1071,7 @@ actions:
                             "op": none,
                             "ot": none,
                             "ec": false,
-                            "iu": ignore_until_new,
-                            "ab": current_azimuth_bucket | int
+                            "iu": ignore_until_new
                           } | to_json
                         }}
 
@@ -1079,14 +1094,10 @@ actions:
                         "tt": none,
                         "op": none,
                         "ot": none,
-                        "ec": false,
-                        "ab": current_azimuth_bucket | int
+                        "ec": false
                       } | to_json
                     }}
 
-      ##########################################################################
-      # Externe Änderung während Fenster offen
-      ##########################################################################
       - conditions:
           - condition: template
             value_template: "{{ trigger.id in ['cover_tilt_changed', 'cover_position_changed'] }}"
@@ -1125,15 +1136,10 @@ actions:
                     "tt": window_tilt_position | int,
                     "op": fsm_original_position,
                     "ot": fsm_original_tilt,
-                    "ec": true,
-                    "ab": fsm_azimuth_bucket
+                    "ec": true
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Pre-Morning
-      # Regen blockiert pre_morning nicht, Wind aber schon.
-      ##########################################################################
       - conditions:
           - condition: template
             value_template: "{{ trigger.id in ['pre_morning_brightness', 'pre_morning_time'] }}"
@@ -1168,8 +1174,7 @@ actions:
                             "op": none,
                             "ot": none,
                             "ec": false,
-                            "iu": ignore_until_new,
-                            "ab": current_azimuth_bucket | int
+                            "iu": ignore_until_new
                           } | to_json
                         }}
 
@@ -1188,14 +1193,10 @@ actions:
                         "tt": none,
                         "op": none,
                         "ot": none,
-                        "ec": false,
-                        "ab": current_azimuth_bucket | int
+                        "ec": false
                       } | to_json
                     }}
 
-      ##########################################################################
-      # Morgendliche Aktion
-      ##########################################################################
       - conditions:
           - condition: template
             value_template: >
@@ -1278,20 +1279,15 @@ actions:
                     "op": none,
                     "ot": none,
                     "ec": false,
-                    "iu": ignore_until_new,
-                    "ab": current_azimuth_bucket | int
+                    "iu": ignore_until_new
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Sonne verlässt Sonnenfenster
-      ##########################################################################
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+            value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed'] }}"
           - condition: template
-            value_template: >
-              {{ trigger.id != 'sun_position_changed' or azimuth_bucket_changed }}
+            value_template: "{{ is_state(sun_entity, 'above_horizon') }}"
           - condition: template
             value_template: "{{ effective_state in ['sunny_tilt', 'cloudy_tilt'] }}"
           - condition: template
@@ -1311,14 +1307,10 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": none,
                     "ot": none,
-                    "ec": false,
-                    "ab": current_azimuth_bucket | int
+                    "ec": false
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Manuelle KNX-Übersteuerung
-      ##########################################################################
       - conditions:
           - condition: template
             value_template: "{{ trigger.id in ['cover_tilt_changed', 'cover_position_changed'] }}"
@@ -1364,14 +1356,10 @@ actions:
                     "tt": fsm_target_tilt,
                     "op": none,
                     "ot": none,
-                    "ec": false,
-                    "ab": fsm_azimuth_bucket
+                    "ec": false
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Closing for Tilt: nach Positionsrückmeldung Tilt setzen
-      ##########################################################################
       - conditions:
           - condition: trigger
             id: cover_position_changed
@@ -1405,20 +1393,15 @@ actions:
                     "op": none,
                     "ot": none,
                     "ec": false,
-                    "iu": ignore_until_new,
-                    "ab": current_azimuth_bucket | int
+                    "iu": ignore_until_new
                   } | to_json
                 }}
 
-      ##########################################################################
-      # Sonnenstandsabhängige Beschattung
-      ##########################################################################
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+            value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed'] }}"
           - condition: template
-            value_template: >
-              {{ trigger.id != 'sun_position_changed' or azimuth_bucket_changed }}
+            value_template: "{{ is_state(sun_entity, 'above_horizon') }}"
           - condition: template
             value_template: >
               {{ effective_state in [
@@ -1462,8 +1445,7 @@ actions:
                             "tt": target_tilt | int,
                             "op": none,
                             "ot": none,
-                            "ec": false,
-                            "ab": current_azimuth_bucket | int
+                            "ec": false
                           } | to_json
                         }}
 
@@ -1489,21 +1471,15 @@ actions:
                         "op": none,
                         "ot": none,
                         "ec": false,
-                        "iu": ignore_until_new,
-                        "ab": current_azimuth_bucket | int
+                        "iu": ignore_until_new
                       } | to_json
                     }}
 
-      ##########################################################################
-      # Sonnenfenster erreicht, aber keine Aktion nötig:
-      # State trotzdem korrekt setzen
-      ##########################################################################
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id in ['sun_position_changed', 'sunshine_changed'] }}"
+            value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed'] }}"
           - condition: template
-            value_template: >
-              {{ trigger.id != 'sun_position_changed' or azimuth_bucket_changed }}
+            value_template: "{{ is_state(sun_entity, 'above_horizon') }}"
           - condition: template
             value_template: >
               {{ effective_state in [
@@ -1537,7 +1513,6 @@ actions:
                     "tt": target_tilt | int,
                     "op": none,
                     "ot": none,
-                    "ec": false,
-                    "ab": current_azimuth_bucket | int
+                    "ec": false
                   } | to_json
                 }}
