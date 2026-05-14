@@ -553,9 +553,16 @@ variables:
        and current_position < (open_position_threshold | int) }}
 
   sun_in_window: >
-    {{ sun_elevation >= min_elevation
-       and sun_azimuth >= min_azimuth
-       and sun_azimuth <= max_azimuth }}
+    {% set az = sun_azimuth | float(0) %}
+    {% set min_az = min_azimuth | float(0) %}
+    {% set max_az = max_azimuth | float(0) %}
+    {% set elevation_ok = sun_elevation >= min_elevation %}
+
+    {% if min_az <= max_az %}
+      {{ elevation_ok and az >= min_az and az <= max_az }}
+    {% else %}
+      {{ elevation_ok and (az >= min_az or az <= max_az) }}
+    {% endif %}
 
   current_azimuth_bucket: >
     {% set step = [sun_azimuth_trigger_step | int(5), 1] | max %}
