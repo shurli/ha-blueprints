@@ -311,6 +311,7 @@ blueprint:
           description: >
             Wenn aktiviert, wird eine offene Jalousie zuerst geschlossen,
             bevor der Sonnen-Tilt gesetzt wird.
+            Bei wolkig/trüb wird eine offene Jalousie nicht geschlossen.
           default: true
           selector:
             boolean:
@@ -402,6 +403,20 @@ blueprint:
               step: 1
               unit_of_measurement: "%"
 
+        manual_detection_delay:
+          name: Verzögerung für manuelle Erkennung
+          description: >
+            Zeit, die eine Positions-/Tiltänderung stabil bleiben muss, bevor sie
+            als mögliche manuelle KNX-Bedienung bewertet wird.
+            Für KNX sind 60–90 Sekunden sinnvoll.
+          default: 60
+          selector:
+            number:
+              min: 5
+              max: 180
+              step: 5
+              unit_of_measurement: "s"
+
         feedback_ignore_seconds:
           name: Rückmelde-Sperrzeit nach Automatikaktion
           description: >
@@ -460,6 +475,7 @@ variables:
 
   manual_tilt_tolerance: !input manual_tilt_tolerance
   manual_position_tolerance: !input manual_position_tolerance
+  manual_detection_delay: !input manual_detection_delay
   feedback_ignore_seconds: !input feedback_ignore_seconds
 
   fsm_state: >
@@ -592,8 +608,12 @@ variables:
        and ((current_tilt - (target_tilt | int)) | abs) > (manual_tilt_tolerance | int) }}
 
   solar_action_needed: >
-    {{ (close_open_cover_for_sun | bool and cover_is_open)
-       or solar_tilt_needed }}
+    {% if sunshine_on %}
+      {{ (close_open_cover_for_sun | bool and cover_is_open)
+         or solar_tilt_needed }}
+    {% else %}
+      {{ (not cover_is_open) and solar_tilt_needed }}
+    {% endif %}
 
 triggers:
   - trigger: homeassistant
@@ -666,14 +686,14 @@ triggers:
     entity_id: !input cover_entity
     attribute: current_tilt_position
     for:
-      seconds: 3
+      seconds: !input manual_detection_delay
     id: cover_tilt_changed
 
   - trigger: state
     entity_id: !input cover_entity
     attribute: current_position
     for:
-      seconds: 3
+      seconds: !input manual_detection_delay
     id: cover_position_changed
 
 conditions: []
@@ -822,7 +842,7 @@ actions:
               value: >
                 {% set resume =
                     'window_tilt' if not window_is_closed
-                    else 'rainy' if rain_active
+                    else 'rainy' if rain_active and effective_state != 'pre_morning'
                     else fsm_previous if fsm_previous == 'manual_override'
                     else phase_state
                 %}
@@ -842,6 +862,7 @@ actions:
 
       ##########################################################################
       # Regen aktiv
+      # pre_morning hat höhere Priorität als rainy.
       ##########################################################################
       - conditions:
           - condition: trigger
@@ -852,6 +873,8 @@ actions:
             value_template: "{{ not wind_active }}"
           - condition: template
             value_template: "{{ effective_state != 'rainy' }}"
+          - condition: template
+            value_template: "{{ effective_state != 'pre_morning' }}"
         sequence:
           - action: input_text.set_value
             target:
@@ -1061,6 +1084,9 @@ actions:
           - condition: template
             value_template: "{{ trigger.id in ['cover_tilt_changed', 'cover_position_changed'] }}"
           - condition: template
+            value_template: >
+              {{ fsm_state != 'ignore_feedback' or ignore_feedback_expired }}
+          - condition: template
             value_template: "{{ effective_state == 'window_tilt' }}"
           - condition: template
             value_template: "{{ not window_is_closed }}"
@@ -1099,14 +1125,15 @@ actions:
 
       ##########################################################################
       # Pre-Morning
+      # Regen blockiert pre_morning nicht, Wind aber schon.
       ##########################################################################
       - conditions:
           - condition: template
             value_template: "{{ trigger.id in ['pre_morning_brightness', 'pre_morning_time'] }}"
           - condition: template
-            value_template: "{{ not wind_active and not rain_active and window_is_closed }}"
+            value_template: "{{ not wind_active and window_is_closed }}"
           - condition: template
-            value_template: "{{ effective_state in ['night', 'evening'] }}"
+            value_template: "{{ effective_state in ['night', 'evening', 'rainy'] }}"
         sequence:
           - choose:
               - conditions:
@@ -1290,6 +1317,9 @@ actions:
             value_template: "{{ trigger.id in ['cover_tilt_changed', 'cover_position_changed'] }}"
           - condition: template
             value_template: >
+              {{ fsm_state != 'ignore_feedback' or ignore_feedback_expired }}
+          - condition: template
+            value_template: >
               {{ effective_state in ['waiting_for_sun', 'sunny_tilt', 'cloudy_tilt'] }}
           - condition: template
             value_template: "{{ window_is_closed and not wind_active and not rain_active }}"
@@ -1403,7 +1433,9 @@ actions:
               - conditions:
                   - condition: template
                     value_template: >
-                      {{ close_open_cover_for_sun | bool and cover_is_open }}
+                      {{ sunshine_on
+                         and close_open_cover_for_sun | bool
+                         and cover_is_open }}
                 sequence:
                   - action: cover.close_cover
                     target:
