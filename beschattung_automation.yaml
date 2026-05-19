@@ -1,5 +1,5 @@
 blueprint:
-  name: "Beschattung: Jalousie Gesamtsteuerung JSON-FSM"
+  name: "Beschattung: Jalousiesteuerung"
   description: >
     Ereignisgetriebene Gesamtsteuerung für eine KNX-Jalousie mit:
     - Pre-Morning-Schließen über Helligkeit oder Sonnenhöhe
@@ -578,16 +578,32 @@ variables:
     {% endif %}
 
   phase_state: >
+    {% set az = sun_azimuth | float(0) %}
+    {% set min_az = min_azimuth | float(0) %}
+    {% set max_az = max_azimuth | float(0) %}
+    {% set wrap = min_az > max_az %}
+
     {% if is_state(sun_entity, 'below_horizon') %}
       night
+
     {% elif sun_in_window %}
       {{ target_solar_state }}
-    {% elif sun_azimuth > max_azimuth and min_azimuth <= max_azimuth %}
-      evening
-    {% elif min_azimuth > max_azimuth and sun_elevation < min_elevation and is_state(sun_entity, 'above_horizon') %}
-      evening
+
+    {% elif not wrap %}
+      {% if az > max_az %}
+        evening
+      {% else %}
+        waiting_for_sun
+      {% endif %}
+
     {% else %}
-      waiting_for_sun
+      {% if az <= max_az %}
+        waiting_for_sun
+      {% elif az < min_az %}
+        waiting_for_sun
+      {% else %}
+        evening
+      {% endif %}
     {% endif %}
 
   solar_tilt_needed: >
@@ -1354,7 +1370,7 @@ actions:
                   } | to_json
                 }}
 
-      - alias: "Sonnenfenster verlassen: in evening wechseln"
+      - alias: "Sonnenfenster verlassen: nächsten Tageszustand setzen"
         conditions:
           - alias: "Trigger ist Solar-Update oder Sonnenscheinwechsel"
             condition: template
@@ -1368,6 +1384,9 @@ actions:
           - alias: "Sonne ist nicht mehr im Sonnenfenster"
             condition: template
             value_template: "{{ not sun_in_window }}"
+          - alias: "FSM-State muss geändert werden"
+            condition: template
+            value_template: "{{ effective_state != phase_state }}"
         sequence:
           - action: input_text.set_value
             target:
@@ -1376,7 +1395,7 @@ actions:
               value: >
                 {{
                   {
-                    "s": "evening",
+                    "s": phase_state,
                     "p": effective_state,
                     "n": none,
                     "a": "sun_left_window",
