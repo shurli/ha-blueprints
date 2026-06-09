@@ -1217,7 +1217,7 @@ actions:
             value_template: "{{ trigger.id in ['pre_morning_brightness', 'pre_morning_elevation'] }}"
           - alias: "Kein Windschutz und Fenster geschlossen"
             condition: template
-            value_template: "{{ not wind_active and window_is_closed }}"
+            value_template: "{{ not wind_active }}"
           - alias: "Pre-Morning nur aus night/evening/rainy"
             condition: template
             value_template: "{{ effective_state in ['night', 'evening', 'rainy'] }}"
@@ -1290,9 +1290,6 @@ actions:
           - alias: "Morgenfunktion ist aktiviert"
             condition: template
             value_template: "{{ morning_enabled | bool }}"
-          - alias: "Fenster ist geschlossen"
-            condition: template
-            value_template: "{{ window_is_closed }}"
           - alias: "FSM erlaubt Morgenfunktion"
             condition: template
             value_template: >
@@ -1517,7 +1514,6 @@ actions:
             condition: template
             value_template: >
               {{ effective_state in [
-                'pre_morning',
                 'morning_tilt',
                 'waiting_for_sun',
                 'sunny_tilt',
