@@ -7,6 +7,7 @@ blueprint:
     - Fenster-Kippstellung
     - Sonnenstandsabhängiger Tilt-Beschattung
     - Manuellem Override
+    - Globalem Komfort-Master (Windschutz/Fensterfunktion bleiben aktiv)
     - Wind- und Regenzuständen
 
     JSON Kurzschema:
@@ -34,6 +35,18 @@ blueprint:
           selector:
             entity:
               domain: input_text
+
+        comfort_automation_helper:
+          name: Globaler Komfort-Automatik-Schalter
+          description: >
+            input_boolean-Helper als globaler Master-Schalter für die Komfortautomatik.
+            Standardmäßig wird input_boolean.jalousien_komfortautomatik verwendet;
+            pro Blueprint-Instanz kann ein anderer input_boolean ausgewählt werden.
+            Windschutz und Fenster-Kippstellung bleiben unabhängig davon aktiv.
+          default: input_boolean.jalousien_komfortautomatik
+          selector:
+            entity:
+              domain: input_boolean
 
         cover_entity:
           name: KNX-Jalousie / Cover
@@ -433,6 +446,7 @@ trace:
 
 variables:
   fsm_helper: !input fsm_helper
+  comfort_automation_helper: !input comfort_automation_helper
   cover_entity: !input cover_entity
   window_sensor: !input window_sensor
   sunshine_sensor: !input sunshine_sensor
@@ -525,6 +539,7 @@ variables:
   window_is_closed: "{{ is_state(window_sensor, 'off') }}"
   wind_active: "{{ is_state(wind_sensor, 'on') }}"
   rain_active: "{{ is_state(rain_sensor, 'on') }}"
+  comfort_enabled: "{{ is_state(comfort_automation_helper, 'on') }}"
 
   current_tilt: "{{ state_attr(cover_entity, 'current_tilt_position') | int(-1) }}"
   current_position: "{{ state_attr(cover_entity, 'current_position') | int(-1) }}"
@@ -756,6 +771,10 @@ triggers:
     id: rain_changed
 
   - trigger: state
+    entity_id: !input comfort_automation_helper
+    id: comfort_changed
+
+  - trigger: state
     entity_id: !input cover_entity
     attribute: current_tilt_position
     for:
@@ -811,7 +830,7 @@ actions:
               value: >
                 {{
                   {
-                    "s": phase_state,
+                    "s": phase_state if comfort_enabled else "comfort_disabled",
                     "p": fsm_state,
                     "n": none,
                     "a": "ha_start",
@@ -835,10 +854,45 @@ actions:
               value: >
                 {{
                   {
-                    "s": "night",
+                    "s": "night" if comfort_enabled else "comfort_disabled",
                     "p": effective_state,
                     "n": none,
                     "a": "sunset",
+                    "tt": none,
+                    "op": none,
+                    "ot": none,
+                    "ec": false
+                  } | to_json
+                }}
+
+      - alias: "Komfortautomatik ausschalten: Komfort-FSM sperren"
+        conditions:
+          - alias: "Trigger ist globaler Komfortschalter"
+            condition: trigger
+            id: comfort_changed
+          - alias: "Komfortautomatik ist ausgeschaltet"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "off"
+          - alias: "Windschutz ist nicht aktiv"
+            condition: state
+            entity_id: !input wind_sensor
+            state: "off"
+          - alias: "Fenster-Kippstellung bleibt unangetastet"
+            condition: template
+            value_template: "{{ effective_state != 'window_tilt' }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": "comfort_disabled",
+                    "p": effective_state,
+                    "n": none,
+                    "a": "comfort_off",
                     "tt": none,
                     "op": none,
                     "ot": none,
@@ -916,9 +970,10 @@ actions:
               value: >
                 {% set resume =
                     'window_tilt' if not window_is_closed
-                    else 'rainy' if rain_active and effective_state != 'pre_morning'
-                    else fsm_previous if fsm_previous == 'manual_override'
-                    else phase_state
+                    else 'rainy' if comfort_enabled and rain_active and effective_state != 'pre_morning'
+                    else fsm_previous if comfort_enabled and fsm_previous == 'manual_override'
+                    else phase_state if comfort_enabled
+                    else 'comfort_disabled'
                 %}
                 {{
                   {
@@ -935,9 +990,13 @@ actions:
 
       - alias: "Regenschutz aktivieren"
         conditions:
-          - alias: "Trigger ist Regensensor"
-            condition: trigger
-            id: rain_changed
+          - alias: "Trigger ist Regensensor oder Komfortschalter"
+            condition: template
+            value_template: "{{ trigger.id in ['rain_changed', 'comfort_changed'] }}"
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
           - alias: "Regen ist aktiv"
             condition: template
             value_template: "{{ rain_active }}"
@@ -1009,8 +1068,9 @@ actions:
               value: >
                 {% set resume =
                     'window_tilt' if not window_is_closed
-                    else fsm_previous if fsm_previous == 'manual_override'
-                    else phase_state
+                    else fsm_previous if comfort_enabled and fsm_previous == 'manual_override'
+                    else phase_state if comfort_enabled
+                    else 'comfort_disabled'
                 %}
                 {{
                   {
@@ -1122,8 +1182,9 @@ actions:
                     data:
                       value: >
                         {% set next =
-                            'manual_override' if fsm_previous == 'manual_override'
-                            else phase_state
+                            'manual_override' if comfort_enabled and fsm_previous == 'manual_override'
+                            else phase_state if comfort_enabled
+                            else 'comfort_disabled'
                         %}
                         {{
                           {
@@ -1146,8 +1207,9 @@ actions:
                 data:
                   value: >
                     {% set next =
-                        'manual_override' if fsm_previous == 'manual_override'
-                        else phase_state
+                        'manual_override' if comfort_enabled and fsm_previous == 'manual_override'
+                        else phase_state if comfort_enabled
+                        else 'comfort_disabled'
                     %}
                     {{
                       {
@@ -1212,6 +1274,10 @@ actions:
 
       - alias: "Pre-Morning: Schlafschutz aktivieren"
         conditions:
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
           - alias: "Trigger ist Helligkeit oder Sonnenhöhe"
             condition: template
             value_template: "{{ trigger.id in ['pre_morning_brightness', 'pre_morning_elevation'] }}"
@@ -1275,6 +1341,10 @@ actions:
 
       - alias: "Morgenfunktion: Jalousie tilten oder öffnen"
         conditions:
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
           - alias: "Trigger ist eine Wochentags-Morgenzeit"
             condition: template
             value_template: >
@@ -1369,6 +1439,10 @@ actions:
 
       - alias: "Sonnenfenster verlassen: nächsten Tageszustand setzen"
         conditions:
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
           - alias: "Trigger ist Solar-Update oder Sonnenscheinwechsel"
             condition: template
             value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed'] }}"
@@ -1405,6 +1479,10 @@ actions:
 
       - alias: "Manuelle KNX-Übersteuerung erkennen"
         conditions:
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
           - alias: "Trigger ist Cover-Position oder Cover-Tilt"
             condition: template
             value_template: "{{ trigger.id in ['cover_tilt_changed', 'cover_position_changed'] }}"
@@ -1461,6 +1539,10 @@ actions:
 
       - alias: "Nach Schließen für Sonnen-Tilt: Lamellen setzen"
         conditions:
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
           - alias: "Trigger ist Cover-Positionsänderung"
             condition: trigger
             id: cover_position_changed
@@ -1502,11 +1584,59 @@ actions:
                   } | to_json
                 }}
 
+
+      - alias: "Komfortautomatik einschalten: FSM an aktuelle Tagesphase angleichen"
+        conditions:
+          - alias: "Trigger ist globaler Komfortschalter"
+            condition: trigger
+            id: comfort_changed
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
+          - alias: "Windschutz ist nicht aktiv"
+            condition: state
+            entity_id: !input wind_sensor
+            state: "off"
+          - alias: "Fenster ist geschlossen"
+            condition: state
+            entity_id: !input window_sensor
+            state: "off"
+          - alias: "Regenschutz ist nicht aktiv"
+            condition: state
+            entity_id: !input rain_sensor
+            state: "off"
+          - alias: "Sonne ist nicht im Sonnenfenster"
+            condition: template
+            value_template: "{{ not sun_in_window }}"
+        sequence:
+          - action: input_text.set_value
+            target:
+              entity_id: !input fsm_helper
+            data:
+              value: >
+                {{
+                  {
+                    "s": phase_state,
+                    "p": effective_state,
+                    "n": none,
+                    "a": "comfort_on_sync",
+                    "tt": none,
+                    "op": none,
+                    "ot": none,
+                    "ec": false
+                  } | to_json
+                }}
+
       - alias: "Sonnenbeschattung: Tilt setzen oder vorher schließen"
         conditions:
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
           - alias: "Trigger ist Solar-Update oder Sonnenscheinwechsel"
             condition: template
-            value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed'] }}"
+            value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed', 'comfort_changed'] }}"
           - alias: "Sonne ist über dem Horizont"
             condition: template
             value_template: "{{ is_state(sun_entity, 'above_horizon') }}"
@@ -1518,7 +1648,8 @@ actions:
                 'waiting_for_sun',
                 'sunny_tilt',
                 'cloudy_tilt',
-                'evening'
+                'evening',
+                'comfort_disabled'
               ] }}
           - alias: "Fenster geschlossen, kein Wind, kein Regen"
             condition: template
@@ -1590,9 +1721,13 @@ actions:
 
       - alias: "Sonnenfenster erreicht: nur FSM-State aktualisieren"
         conditions:
-          - alias: "Trigger ist Solar-Update oder Sonnenscheinwechsel"
+          - alias: "Komfortautomatik ist aktiv"
+            condition: state
+            entity_id: !input comfort_automation_helper
+            state: "on"
+          - alias: "Trigger ist Solar-Update, Sonnenscheinwechsel oder Komfortschalter"
             condition: template
-            value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed'] }}"
+            value_template: "{{ trigger.id in ['solar_update', 'sunshine_changed', 'comfort_changed'] }}"
           - alias: "Sonne ist über dem Horizont"
             condition: template
             value_template: "{{ is_state(sun_entity, 'above_horizon') }}"
@@ -1605,7 +1740,8 @@ actions:
                 'waiting_for_sun',
                 'evening',
                 'sunny_tilt',
-                'cloudy_tilt'
+                'cloudy_tilt',
+                'comfort_disabled'
               ] }}
           - alias: "Fenster geschlossen, kein Wind, kein Regen"
             condition: template
