@@ -125,7 +125,7 @@ actions:
           AND s.last_updated_ts >= {{ (as_timestamp(now()) - (long_days | int) * 86400) | int }}
           AND s.last_updated_ts <= {{ as_timestamp(now()) | int }}
           AND s.state NOT IN ('unknown', 'unavailable')
-          AND s.state REGEXP '^[0-9]+([.][0-9]+)?
+          AND s.state REGEXP CONCAT('^[0-9]+([.][0-9]+)?', CHAR(36))
     response_variable: soc_history
   - action: sql.query
     data:
@@ -188,85 +188,6 @@ actions:
                  and minimum_days | int(0) >= long_days | int
                  and sampled_days | int(0) >= long_days | int
                  and first_sample | float(0) <= as_timestamp(now()) - (long_days | int) * 86400 + 3600
-                 and reserve_changes | int(999) == 0 }}
-        sequence:
-          - variables:
-              desired_reserve: >-
-                {% set current = current_reserve | float %}
-                {% set soc = states(soc_entity) | float(-1) %}
-                {% set high = [upper_limit | float, state_attr(reserve_entity, 'max') | float(100)] | min %}
-                {% set safe = (soc - 1) | round(0, 'floor') %}
-                {% if soc >= 0 and safe > current %}
-                  {{ [high, current + (up_step | float), safe] | min }}
-                {% else %}
-                  {{ current }}
-                {% endif %}
-          - condition: template
-            value_template: >-
-              {{ desired_reserve | float > current_reserve | float
-                 and desired_reserve | float <= states(soc_entity) | float(-1) - 1 }}
-          - action: number.set_value
-            target:
-              entity_id: !input reserve_number
-            data:
-              value: "{{ desired_reserve | float }}"
-
-mode: single
-
-    response_variable: soc_history
-  - action: sql.query
-    data:
-      query: >-
-        SELECT COUNT(*) AS changes
-        FROM states s
-        JOIN states_meta m ON m.metadata_id = s.metadata_id
-        JOIN states p ON p.state_id = s.old_state_id
-        WHERE m.entity_id = '{{ reserve_entity }}'
-          AND s.last_updated_ts >= {{ (as_timestamp(now()) - (long_days | int) * 86400) | int }}
-          AND s.state NOT IN ('unknown', 'unavailable')
-          AND p.state NOT IN ('unknown', 'unavailable')
-          AND s.state != p.state
-    response_variable: reserve_history
-  - variables:
-      short_max: >-
-        {% set r = soc_history.get('result', []) %}
-        {{ r[0].get('short_max') | float(-1) if r | count else -1 }}
-      short_min: >-
-        {% set r = soc_history.get('result', []) %}
-        {{ r[0].get('short_min') | float(101) if r | count else 101 }}
-      long_max: >-
-        {% set r = soc_history.get('result', []) %}
-        {{ r[0].get('long_max') | float(-1) if r | count else -1 }}
-      minimum_days: >-
-        {% set r = soc_history.get('result', []) %}
-        {{ r[0].get('min_days') | int(0) if r | count else 0 }}
-      reserve_changes: >-
-        {% set r = reserve_history.get('result', []) %}
-        {{ r[0].get('changes') | int(999) if r | count else 999 }}
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: >-
-              {{ short_max | float(-1) >= 100
-                 and short_min | float(101) <= current_reserve | float }}
-        sequence:
-          - variables:
-              desired_reserve: >-
-                {% set low = [lower_limit | float, state_attr(reserve_entity, 'min') | float(0)] | max %}
-                {{ [low, (current_reserve | float) - (down_step | float)] | max }}
-          - condition: template
-            value_template: "{{ desired_reserve | float < current_reserve | float }}"
-          - action: number.set_value
-            target:
-              entity_id: !input reserve_number
-            data:
-              value: "{{ desired_reserve | float }}"
-      - conditions:
-          - condition: template
-            value_template: >-
-              {{ long_max | float(-1) >= 0
-                 and long_max | float(-1) < 100
-                 and minimum_days | int(0) >= long_days | int
                  and reserve_changes | int(999) == 0 }}
         sequence:
           - variables:
