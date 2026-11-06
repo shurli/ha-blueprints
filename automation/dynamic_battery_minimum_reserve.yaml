@@ -50,16 +50,16 @@ blueprint:
           step: 1
           unit_of_measurement: d
           mode: box
-    decrease_window_days:
-      name: Beobachtungszeitraum fuer Reduzierung (Tage)
-      description: Volle Ladung in diesem Zeitraum reduziert die Reserve. Achtung, dieselbe Ladung kann bei mehreren Pruefungen erneut zaehlen.
+    decrease_window_hours:
+      name: Beobachtungszeitraum fuer Reduzierung (Stunden)
+      description: Volle Ladung in diesem Zeitraum reduziert die Reserve. Bei Pruefintervallen ueber einem Tag koennen volle Ladungen zwischen Pruefungen unberuecksichtigt bleiben.
       default: 24
       selector:
         number:
           min: 1
-          max: 60
+          max: 24
           step: 1
-          unit_of_measurement: d
+          unit_of_measurement: h
           mode: box
     increase_step_percent:
       name: Schrittweite fuer Erhoehung (Prozentpunkte)
@@ -124,11 +124,11 @@ actions:
       lower_limit: !input min_reserve
       upper_limit: !input max_reserve
       increase_days: !input increase_window_days
-      decrease_days: !input decrease_window_days
-      history_start: "{{ (now() - timedelta(days=[increase_days | int, decrease_days | int] | max)).isoformat() }}"
+      decrease_hours: !input decrease_window_hours
+      history_start: "{{ (now() - timedelta(days=increase_days | int)).isoformat() }}"
       increase_start: "{{ (now() - timedelta(days=increase_days | int)).isoformat() }}"
       history_end: "{{ now().isoformat() }}"
-      recent_start: "{{ (now() - timedelta(days=decrease_days | int)).isoformat() }}"
+      recent_start: "{{ (now() - timedelta(hours=decrease_hours | int)).isoformat() }}"
   - action: recorder.get_statistics
     data:
       statistic_ids:
