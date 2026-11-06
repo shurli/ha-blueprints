@@ -1,5 +1,5 @@
 blueprint:
-  name: Dynamische Batterie-Mindestreserve nach taeglichen SOC-Extrema
+  name: Batterieregelung: Dynamische Mindestreserve
   description: >
     Prueft taeglich den SOC-Verlauf. Sind innerhalb des kurzen Zeitfensters
     sowohl 100 Prozent als auch die eingestellte Reserve erreicht worden,
@@ -31,7 +31,7 @@ blueprint:
       selector:
         number:
           min: 1
-          max: 24
+          max: 48
           step: 1
           unit_of_measurement: h
           mode: box
