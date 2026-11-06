@@ -2,9 +2,10 @@ blueprint:
   name: Dynamische Batterie-Mindestreserve nach 7-Tage-Ladehistorie
   description: >
     Passt die Mindestreserve eines Batteriespeichers einmal taeglich an.
-    Wurde innerhalb der letzten sieben Tage ein Ladezustand von 100 %
-    erreicht, sinkt die Reserve um eine Schrittweite. Andernfalls steigt
-    sie um eine Schrittweite. Die Reserve bleibt innerhalb der definierten
+    Wurde innerhalb der letzten 24 Stunden ein Ladezustand von 100 %
+    erreicht, sinkt die Reserve um eine Schrittweite. Wurde sieben Tage
+    lang kein Ladezustand von 100 % erreicht, steigt die Reserve um eine
+    Schrittweite. Dazwischen bleibt die Reserve unveraendert. Die Reserve bleibt innerhalb der definierten
     Grenzen. Benoetigt Recorder-Statistiken fuer den SOC-Sensor
     (state_class: measurement, Einheit %). Die Aktion recorder.get_statistics
     erfordert Administratorrechte.
@@ -73,6 +74,7 @@ actions:
       upper_limit: !input max_reserve
       history_start: "{{ (now() - timedelta(days=7)).isoformat() }}"
       history_end: "{{ now().isoformat() }}"
+      recent_start: "{{ (now() - timedelta(hours=24)).isoformat() }}"
   - action: recorder.get_statistics
     data:
       statistic_ids:
@@ -93,6 +95,18 @@ actions:
           {% endif %}
         {% endfor %}
         {{ ns.highest }}
+      recent_full_charge: >-
+        {% set rows = battery_history.get('statistics', {}).get(soc_entity, []) %}
+        {% set cutoff = as_timestamp(recent_start) %}
+        {% set ns = namespace(found=false) %}
+        {% for row in rows %}
+          {% if as_timestamp(row.get('end'), 0) > cutoff
+                and row.get('max') is not none
+                and row['max'] | float(-1) >= 100 %}
+            {% set ns.found = true %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.found }}
       history_coverage_ok: >-
         {% set rows = battery_history.get('statistics', {}).get(soc_entity, []) %}
         {{ rows | count > 0
@@ -111,10 +125,12 @@ actions:
         {% set step = step_size | float %}
         {% set low = [lower_limit | float, state_attr(reserve_entity, 'min') | float(0)] | max %}
         {% set high = [upper_limit | float, state_attr(reserve_entity, 'max') | float(100)] | min %}
-        {% if daily_maximum | float >= 100 %}
+        {% if recent_full_charge | bool(false) %}
           {{ [low, current - step] | max }}
-        {% else %}
+        {% elif daily_maximum | float < 100 %}
           {{ [high, current + step] | min }}
+        {% else %}
+          {{ current }}
         {% endif %}
   - condition: template
     value_template: >-
