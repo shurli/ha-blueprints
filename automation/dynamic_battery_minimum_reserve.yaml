@@ -1,7 +1,7 @@
 blueprint:
-  name: Dynamische Batterie-Mindestreserve nach 7-Tage-Ladehistorie
+  name: Dynamische Batterie-Mindestreserve nach Ladehistorie
   description: >
-    Passt die Mindestreserve eines Batteriespeichers einmal taeglich an.
+    Passt die Mindestreserve eines Batteriespeichers alle X Tage an.
     Wurde innerhalb des einstellbaren kurzen Beobachtungszeitraums
     ein Ladezustand von 100 % erreicht, sinkt die Reserve um eine
     Schrittweite. Wurde innerhalb des einstellbaren langen
@@ -25,13 +25,24 @@ blueprint:
           domain: number
     adjustment_time:
       name: Taegliche Pruefzeit
-      default: "12:00:00"
+      default: "13:00:00"
       selector:
         time: {}
+    check_interval_days:
+      name: Pruefintervall (alle X Tage)
+      description: 1 = taeglich, 2 = jeden zweiten Tag usw. Fester Kalenderanker 2020-01-01.
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          unit_of_measurement: d
+          mode: box
     increase_window_days:
       name: Beobachtungszeitraum fuer Erhoehung (Tage)
       description: Ohne volle Ladung in diesem Zeitraum wird die Reserve erhoeht.
-      default: 7
+      default: 3
       selector:
         number:
           min: 1
@@ -39,20 +50,30 @@ blueprint:
           step: 1
           unit_of_measurement: d
           mode: box
-    decrease_window_hours:
-      name: Beobachtungszeitraum fuer Reduzierung (Stunden)
-      description: Volle Ladung in diesem Zeitraum reduziert die Reserve. Bei taeglicher Pruefung maximal 24 Stunden empfohlen.
+    decrease_window_days:
+      name: Beobachtungszeitraum fuer Reduzierung (Tage)
+      description: Volle Ladung in diesem Zeitraum reduziert die Reserve. Achtung, dieselbe Ladung kann bei mehreren Pruefungen erneut zaehlen.
       default: 24
       selector:
         number:
           min: 1
-          max: 24
+          max: 60
           step: 1
-          unit_of_measurement: h
+          unit_of_measurement: d
           mode: box
-    step_percent:
-      name: Schrittweite in Prozentpunkten
+    increase_step_percent:
+      name: Schrittweite fuer Erhoehung (Prozentpunkte)
       default: 5
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+    decrease_step_percent:
+      name: Schrittweite fuer Reduzierung (Prozentpunkte)
+      default: 10
       selector:
         number:
           min: 1
@@ -72,7 +93,7 @@ blueprint:
           mode: box
     max_reserve:
       name: Obere Reservegrenze
-      default: 50
+      default: 40
       selector:
         number:
           min: 0
@@ -81,24 +102,33 @@ blueprint:
           unit_of_measurement: "%"
           mode: box
 
+variables:
+  check_interval: !input check_interval_days
+
 triggers:
   - trigger: time
     at: !input adjustment_time
 
-conditions: []
+conditions:
+  - condition: template
+    value_template: >-
+      {% set interval = check_interval | int(1) %}
+      {{ interval > 0 and ((now().date() - strptime('2020-01-01', '%Y-%m-%d').date()).days % interval) == 0 }}
 
 actions:
   - variables:
       soc_entity: !input battery_soc
       reserve_entity: !input reserve_number
-      step_size: !input step_percent
+      increase_step: !input increase_step_percent
+      decrease_step: !input decrease_step_percent
       lower_limit: !input min_reserve
       upper_limit: !input max_reserve
       increase_days: !input increase_window_days
-      decrease_hours: !input decrease_window_hours
-      history_start: "{{ (now() - timedelta(days=increase_days | int)).isoformat() }}"
+      decrease_days: !input decrease_window_days
+      history_start: "{{ (now() - timedelta(days=[increase_days | int, decrease_days | int] | max)).isoformat() }}"
+      increase_start: "{{ (now() - timedelta(days=increase_days | int)).isoformat() }}"
       history_end: "{{ now().isoformat() }}"
-      recent_start: "{{ (now() - timedelta(hours=decrease_hours | int)).isoformat() }}"
+      recent_start: "{{ (now() - timedelta(days=decrease_days | int)).isoformat() }}"
   - action: recorder.get_statistics
     data:
       statistic_ids:
@@ -110,11 +140,12 @@ actions:
         - max
     response_variable: battery_history
   - variables:
-      daily_maximum: >-
+      increase_window_maximum: >-
         {% set rows = battery_history.get('statistics', {}).get(soc_entity, []) %}
         {% set ns = namespace(highest=-1) %}
+        {% set cutoff = as_timestamp(increase_start) %}
         {% for row in rows %}
-          {% if row.get('max') is not none %}
+          {% if as_timestamp(row.get('end'), 0) > cutoff and row.get('max') is not none %}
             {% set ns.highest = [ns.highest, row['max'] | float(-1)] | max %}
           {% endif %}
         {% endfor %}
@@ -141,22 +172,23 @@ actions:
   - condition: template
     value_template: >-
       {{ history_coverage_ok | bool(false)
-         and daily_maximum | float(-1) >= 0
+         and increase_window_maximum | float(-1) >= 0
          and current_reserve is not none
          and lower_limit | float <= upper_limit | float }}
   - variables:
       desired_reserve: >-
         {% set current = current_reserve | float %}
-        {% set step = step_size | float %}
+        {% set up_step = increase_step | float %}
+        {% set down_step = decrease_step | float %}
         {% set low = [lower_limit | float, state_attr(reserve_entity, 'min') | float(0)] | max %}
         {% set high = [upper_limit | float, state_attr(reserve_entity, 'max') | float(100)] | min %}
         {% if recent_full_charge | bool(false) %}
-          {{ [low, current - step] | max }}
-        {% elif daily_maximum | float < 100 %}
+          {{ [low, current - down_step] | max }}
+        {% elif increase_window_maximum | float < 100 %}
           {% set soc = current_soc | float(-1) %}
           {% set safe_ceiling = (soc - 1) | round(0, 'floor') %}
           {% if soc >= 0 and safe_ceiling > current %}
-            {{ [high, current + step, safe_ceiling] | min }}
+            {{ [high, current + up_step, safe_ceiling] | min }}
           {% else %}
             {{ current }}
           {% endif %}
