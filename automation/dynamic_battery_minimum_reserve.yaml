@@ -170,7 +170,7 @@ actions:
               old_reserve: "{{ states(reserve_entity) | float(none) }}"
               new_reserve: >-
                 {% set low = [lower_limit | float, state_attr(reserve_entity, 'min') | float(0)] | max %}
-                {{ [low, states(reserve_entity) | float(0) - down_step | float] | max }}
+                {{ [low, (states(reserve_entity) | float(0)) - (down_step | float)] | max }}
           - condition: template
             value_template: >-
               {{ old_reserve is not none
