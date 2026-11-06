@@ -4,11 +4,12 @@ blueprint:
     Erhoeht die Mindestreserve nach einer einstellbaren Zeit ohne volle
     Akkuladung bei der geplanten Pruefung. Reduziert sie sofort beim
     Erreichen von 100 Prozent. Beide Richtungen haben eigene Sperrzeiten.
-    Zwei input_datetime-Helfer mit Datum und Uhrzeit speichern die
-    letzten erfolgreichen Anpassungen dauerhaft, auch ueber Neustarts.
-    Ein dritter input_datetime-Helfer speichert die letzte Vollladung.
-    Die Erhoehung bleibt mindestens einen Prozentpunkt unter dem SOC.
-    Vor der ersten erfassten Vollladung ist keine Erhoehung moeglich.
+    Die Sperrzeiten werden aus der Recorder-History der number-Entity
+    ermittelt. Benoetigt eine eingerichtete SQL-Integration (sql.query)
+    sowie Recorder-Statistiken des SOC-Sensors. Die History muss laenger
+    aufbewahrt werden als die laengste Sperrzeit. Bei fehlender Historie
+    kann eine vorherige Aenderung nicht erkannt werden. Eine Erhoehung
+    bleibt mindestens einen Prozentpunkt unter dem aktuellen SOC.
   domain: automation
   input:
     battery_soc:
@@ -21,24 +22,6 @@ blueprint:
       selector:
         entity:
           domain: number
-    last_full_charge:
-      name: Zeitpunkt der letzten Vollladung
-      description: input_datetime-Helfer mit Datum und Uhrzeit; wird bei 100 Prozent aktualisiert.
-      selector:
-        entity:
-          domain: input_datetime
-    last_increase:
-      name: Zeitpunkt der letzten Erhoehung
-      description: Separater input_datetime-Helfer mit Datum und Uhrzeit.
-      selector:
-        entity:
-          domain: input_datetime
-    last_decrease:
-      name: Zeitpunkt der letzten Reduzierung
-      description: Separater input_datetime-Helfer mit Datum und Uhrzeit.
-      selector:
-        entity:
-          domain: input_datetime
     adjustment_time:
       name: Pruefzeit
       default: "13:00:00"
@@ -140,9 +123,6 @@ actions:
   - variables:
       soc_entity: !input battery_soc
       reserve_entity: !input reserve_number
-      full_charge_helper: !input last_full_charge
-      increase_helper: !input last_increase
-      decrease_helper: !input last_decrease
       interval_days: !input check_interval_days
       observation_days: !input increase_window_days
       increase_cooldown_days: !input increase_lock_days
@@ -151,19 +131,36 @@ actions:
       down_step: !input decrease_step_percent
       lower_limit: !input min_reserve
       upper_limit: !input max_reserve
+  - action: sql.query
+    data:
+      query: >-
+        SELECT
+          MAX(CASE WHEN CAST(s.state AS REAL) > CAST(p.state AS REAL)
+              THEN s.last_updated_ts END) AS last_increase,
+          MAX(CASE WHEN CAST(s.state AS REAL) < CAST(p.state AS REAL)
+              THEN s.last_updated_ts END) AS last_decrease
+        FROM states s
+        JOIN states_meta m ON s.metadata_id = m.metadata_id
+        JOIN states p ON p.state_id = s.old_state_id
+        WHERE m.entity_id = '{{ reserve_entity }}'
+          AND s.state NOT IN ('unknown', 'unavailable')
+          AND p.state NOT IN ('unknown', 'unavailable')
+    response_variable: reserve_history
+  - variables:
+      last_up_ts: >-
+        {% set rows = reserve_history.get('result', []) %}
+        {{ rows[0].get('last_increase') | float(0) if rows | count > 0 else 0 }}
+      last_down_ts: >-
+        {% set rows = reserve_history.get('result', []) %}
+        {{ rows[0].get('last_decrease') | float(0) if rows | count > 0 else 0 }}
   - choose:
       - conditions:
           - condition: trigger
             id: full_charge
         sequence:
-          - action: input_datetime.set_datetime
-            target:
-              entity_id: !input last_full_charge
-            data:
-              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
           - condition: template
             value_template: >-
-              {{ as_timestamp(now()) - as_timestamp(states(decrease_helper), 0)
+              {{ as_timestamp(now()) - last_down_ts | float(0)
                  >= decrease_cooldown_hours | float * 3600
                  and lower_limit | float <= upper_limit | float }}
           - variables:
@@ -181,11 +178,6 @@ actions:
               entity_id: !input reserve_number
             data:
               value: "{{ new_reserve | float }}"
-          - action: input_datetime.set_datetime
-            target:
-              entity_id: !input last_decrease
-            data:
-              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
       - conditions:
           - condition: trigger
             id: scheduled
@@ -197,12 +189,37 @@ actions:
         sequence:
           - condition: template
             value_template: >-
-              {% set full = as_timestamp(states(full_charge_helper), 0) %}
-              {{ full > 0
-                 and as_timestamp(now()) - full >= observation_days | float * 86400
-                 and as_timestamp(now()) - as_timestamp(states(increase_helper), 0)
+              {{ as_timestamp(now()) - last_up_ts | float(0)
                      >= increase_cooldown_days | float * 86400
                  and lower_limit | float <= upper_limit | float }}
+          - variables:
+              history_start: "{{ (now() - timedelta(days=observation_days | int)).isoformat() }}"
+              history_end: "{{ now().isoformat() }}"
+          - action: recorder.get_statistics
+            data:
+              statistic_ids:
+                - "{{ soc_entity }}"
+              start_time: "{{ history_start }}"
+              end_time: "{{ history_end }}"
+              period: 5minute
+              types:
+                - max
+            response_variable: soc_history
+          - variables:
+              no_full_charge: >-
+                {% set rows = soc_history.get('statistics', {}).get(soc_entity, []) %}
+                {% set ns = namespace(highest=-1) %}
+                {% for row in rows %}
+                  {% if row.get('max') is not none %}
+                    {% set ns.highest = [ns.highest, row['max'] | float(-1)] | max %}
+                  {% endif %}
+                {% endfor %}
+                {{ rows | count > 0
+                   and as_timestamp(rows[0]['start'], 0) <= as_timestamp(history_start) + 3600
+                   and as_timestamp(rows[-1]['end'], 0) >= as_timestamp(history_end) - 3600
+                   and ns.highest >= 0 and ns.highest < 100 }}
+          - condition: template
+            value_template: "{{ no_full_charge | bool(false) }}"
           - variables:
               old_reserve: "{{ states(reserve_entity) | float(none) }}"
               new_reserve: >-
@@ -226,11 +243,6 @@ actions:
               entity_id: !input reserve_number
             data:
               value: "{{ new_reserve | float }}"
-          - action: input_datetime.set_datetime
-            target:
-              entity_id: !input last_increase
-            data:
-              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
 
 mode: queued
 max: 5
