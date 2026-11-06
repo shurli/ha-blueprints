@@ -2,10 +2,10 @@ blueprint:
   name: Dynamische Batterie-Mindestreserve nach 7-Tage-Ladehistorie
   description: >
     Passt die Mindestreserve eines Batteriespeichers einmal taeglich an.
-    Wurde innerhalb der letzten 24 Stunden ein Ladezustand von 100 %
-    erreicht, sinkt die Reserve um eine Schrittweite. Wurde sieben Tage
-    lang kein Ladezustand von 100 % erreicht, steigt die Reserve um eine
-    Schrittweite. Dazwischen bleibt die Reserve unveraendert. Die Reserve bleibt innerhalb der definierten
+    Wurde innerhalb des einstellbaren kurzen Beobachtungszeitraums
+    ein Ladezustand von 100 % erreicht, sinkt die Reserve um eine
+    Schrittweite. Wurde innerhalb des einstellbaren langen
+    Beobachtungszeitraums keine volle Ladung erreicht, steigt sie. Dazwischen bleibt die Reserve unveraendert. Die Reserve bleibt innerhalb der definierten
     Grenzen. Benoetigt Recorder-Statistiken fuer den SOC-Sensor
     (state_class: measurement, Einheit %). Die Aktion recorder.get_statistics
     erfordert Administratorrechte.
@@ -28,6 +28,28 @@ blueprint:
       default: "12:00:00"
       selector:
         time: {}
+    increase_window_days:
+      name: Beobachtungszeitraum fuer Erhoehung (Tage)
+      description: Ohne volle Ladung in diesem Zeitraum wird die Reserve erhoeht.
+      default: 7
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+          unit_of_measurement: d
+          mode: box
+    decrease_window_hours:
+      name: Beobachtungszeitraum fuer Reduzierung (Stunden)
+      description: Volle Ladung in diesem Zeitraum reduziert die Reserve. Bei taeglicher Pruefung maximal 24 Stunden empfohlen.
+      default: 24
+      selector:
+        number:
+          min: 1
+          max: 24
+          step: 1
+          unit_of_measurement: h
+          mode: box
     step_percent:
       name: Schrittweite in Prozentpunkten
       default: 5
@@ -72,9 +94,11 @@ actions:
       step_size: !input step_percent
       lower_limit: !input min_reserve
       upper_limit: !input max_reserve
-      history_start: "{{ (now() - timedelta(days=7)).isoformat() }}"
+      increase_days: !input increase_window_days
+      decrease_hours: !input decrease_window_hours
+      history_start: "{{ (now() - timedelta(days=increase_days | int)).isoformat() }}"
       history_end: "{{ now().isoformat() }}"
-      recent_start: "{{ (now() - timedelta(hours=24)).isoformat() }}"
+      recent_start: "{{ (now() - timedelta(hours=decrease_hours | int)).isoformat() }}"
   - action: recorder.get_statistics
     data:
       statistic_ids:
