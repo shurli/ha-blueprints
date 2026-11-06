@@ -137,6 +137,7 @@ actions:
            and as_timestamp(rows[0]['start'], 0) <= as_timestamp(history_start) + 3600
            and as_timestamp(rows[-1]['end'], 0) >= as_timestamp(history_end) - 3600 }}
       current_reserve: "{{ states(reserve_entity) | float(none) }}"
+      current_soc: "{{ states(soc_entity) | float(none) }}"
   - condition: template
     value_template: >-
       {{ history_coverage_ok | bool(false)
@@ -152,7 +153,13 @@ actions:
         {% if recent_full_charge | bool(false) %}
           {{ [low, current - step] | max }}
         {% elif daily_maximum | float < 100 %}
-          {{ [high, current + step] | min }}
+          {% set soc = current_soc | float(-1) %}
+          {% set safe_ceiling = (soc - 1) | round(0, 'floor') %}
+          {% if soc >= 0 and safe_ceiling > current %}
+            {{ [high, current + step, safe_ceiling] | min }}
+          {% else %}
+            {{ current }}
+          {% endif %}
         {% else %}
           {{ current }}
         {% endif %}
@@ -160,7 +167,10 @@ actions:
     value_template: >-
       {{ desired_reserve | float != current_reserve | float
          and desired_reserve | float >= lower_limit | float
-         and desired_reserve | float <= upper_limit | float }}
+         and desired_reserve | float <= upper_limit | float
+         and (desired_reserve | float <= current_reserve | float
+              or (states(soc_entity) | float(-1) >= 0
+                  and desired_reserve | float < states(soc_entity) | float(-1))) }}
   - action: number.set_value
     target:
       entity_id: !input reserve_number
