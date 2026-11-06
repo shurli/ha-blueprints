@@ -1,0 +1,130 @@
+blueprint:
+  name: Dynamische Batterie-Mindestreserve nach 7-Tage-Ladehistorie
+  description: >
+    Passt die Mindestreserve eines Batteriespeichers einmal taeglich an.
+    Wurde innerhalb der letzten sieben Tage ein Ladezustand von 100 %
+    erreicht, sinkt die Reserve um eine Schrittweite. Andernfalls steigt
+    sie um eine Schrittweite. Die Reserve bleibt innerhalb der definierten
+    Grenzen. Benoetigt Recorder-Statistiken fuer den SOC-Sensor
+    (state_class: measurement, Einheit %). Die Aktion recorder.get_statistics
+    erfordert Administratorrechte.
+  domain: automation
+  input:
+    battery_soc:
+      name: Akku-Ladezustand
+      description: Sensor mit Ladezustand in Prozent und Recorder-Statistiken.
+      selector:
+        entity:
+          domain: sensor
+    reserve_number:
+      name: Mindest-Ladezustand
+      description: Number-Entity, die die Mindestreserve in Prozent steuert.
+      selector:
+        entity:
+          domain: number
+    adjustment_time:
+      name: Taegliche Pruefzeit
+      default: "12:00:00"
+      selector:
+        time: {}
+    step_percent:
+      name: Schrittweite in Prozentpunkten
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+    min_reserve:
+      name: Untere Reservegrenze
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+    max_reserve:
+      name: Obere Reservegrenze
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+
+triggers:
+  - trigger: time
+    at: !input adjustment_time
+
+conditions: []
+
+actions:
+  - variables:
+      soc_entity: !input battery_soc
+      reserve_entity: !input reserve_number
+      step_size: !input step_percent
+      lower_limit: !input min_reserve
+      upper_limit: !input max_reserve
+      history_start: "{{ (now() - timedelta(days=7)).isoformat() }}"
+      history_end: "{{ now().isoformat() }}"
+  - action: recorder.get_statistics
+    data:
+      statistic_ids:
+        - "{{ soc_entity }}"
+      start_time: "{{ history_start }}"
+      end_time: "{{ history_end }}"
+      period: 5minute
+      types:
+        - max
+    response_variable: battery_history
+  - variables:
+      daily_maximum: >-
+        {% set rows = battery_history.get('statistics', {}).get(soc_entity, []) %}
+        {% set ns = namespace(highest=-1) %}
+        {% for row in rows %}
+          {% if row.get('max') is not none %}
+            {% set ns.highest = [ns.highest, row['max'] | float(-1)] | max %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.highest }}
+      history_coverage_ok: >-
+        {% set rows = battery_history.get('statistics', {}).get(soc_entity, []) %}
+        {{ rows | count > 0
+           and as_timestamp(rows[0]['start'], 0) <= as_timestamp(history_start) + 3600
+           and as_timestamp(rows[-1]['end'], 0) >= as_timestamp(history_end) - 3600 }}
+      current_reserve: "{{ states(reserve_entity) | float(none) }}"
+  - condition: template
+    value_template: >-
+      {{ history_coverage_ok | bool(false)
+         and daily_maximum | float(-1) >= 0
+         and current_reserve is not none
+         and lower_limit | float <= upper_limit | float }}
+  - variables:
+      desired_reserve: >-
+        {% set current = current_reserve | float %}
+        {% set step = step_size | float %}
+        {% set low = [lower_limit | float, state_attr(reserve_entity, 'min') | float(0)] | max %}
+        {% set high = [upper_limit | float, state_attr(reserve_entity, 'max') | float(100)] | min %}
+        {% if daily_maximum | float >= 100 %}
+          {{ [low, current - step] | max }}
+        {% else %}
+          {{ [high, current + step] | min }}
+        {% endif %}
+  - condition: template
+    value_template: >-
+      {{ desired_reserve | float != current_reserve | float
+         and desired_reserve | float >= lower_limit | float
+         and desired_reserve | float <= upper_limit | float }}
+  - action: number.set_value
+    target:
+      entity_id: !input reserve_number
+    data:
+      value: "{{ desired_reserve | float }}"
+
+mode: single
