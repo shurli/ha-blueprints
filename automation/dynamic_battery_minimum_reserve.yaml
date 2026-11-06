@@ -1,5 +1,5 @@
 blueprint:
-  name: Batterieregelung: Dynamische Mindestreserve
+  name: "Batterieregelung: Dynamische Mindestreserve"
   description: >
     Prueft taeglich den SOC-Verlauf. Sind innerhalb des kurzen Zeitfensters
     sowohl 100 Prozent als auch die eingestellte Reserve erreicht worden,
