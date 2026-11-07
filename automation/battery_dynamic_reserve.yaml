@@ -8,6 +8,8 @@ blueprint:
     und die Reserve selbst unveraendert blieb. Benutzt Recorder-History
     ueber sql.query (SQLite und MariaDB) und braucht ausreichend lange History.
     Erhoehungen bleiben mindestens 1 Prozentpunkt unter dem aktuellen SOC.
+    Die SQL-Abfragen filtern auf die ausgewaehlten Entities und Zeitfenster;
+    nichtnumerische SOC-Zustaende werden ausgeschlossen.
   domain: automation
   input:
     battery_soc:
@@ -131,12 +133,11 @@ actions:
         WHERE m.entity_id = '{{ soc_entity }}'
           AND s.last_updated_ts >= {{ history_start_ts | int }}
           AND s.last_updated_ts <= {{ history_end_ts | int }}
-          AND s.state NOT IN ('', '.')
-          AND s.state NOT LIKE '%.%.%'
-          AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-              s.state,'0',''),'1',''),'2',''),'3',''),'4',''),'5',''),
-              '6',''),'7',''),'8',''),'9',''),'.','') = ''
-          AND CAST(s.state AS DECIMAL(10,3)) BETWEEN 0 AND 100
+          AND s.state NOT IN ('unknown', 'unavailable', 'none', '', '.')
+          AND (
+            CAST(s.state AS DECIMAL(10,3)) BETWEEN 0.001 AND 100
+            OR s.state IN ('0', '0.0', '0.00', '0.000')
+          )
     response_variable: soc_history
   - action: sql.query
     data:
