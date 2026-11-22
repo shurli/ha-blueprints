@@ -24,7 +24,7 @@ blueprint:
           domain: number
     adjustment_time:
       name: Pruefzeit
-      default: "20:00:00"
+      default: "18:00:00"
       selector:
         time: {}
     short_window_hours:
