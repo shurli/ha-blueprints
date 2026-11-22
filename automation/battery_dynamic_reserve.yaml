@@ -6,10 +6,10 @@ blueprint:
     wird die Reserve reduziert. Andernfalls wird sie erhoeht, wenn waehrend
     X Tagen keine 100 Prozent, aber taeglich die Reserve erreicht wurde
     und die Reserve selbst unveraendert blieb. Benutzt Recorder-History
-    ueber sql.query (SQLite und MariaDB) und braucht ausreichend lange History.
+    ueber recorder.get_statistics (Stundenwerte, ohne SQL und Helfer).
     Erhoehungen bleiben mindestens 1 Prozentpunkt unter dem aktuellen SOC.
-    Die SQL-Abfragen filtern auf die ausgewaehlten Entities und Zeitfenster;
-    nichtnumerische SOC-Zustaende werden ausgeschlossen.
+    Der SOC-Sensor muss Langzeitstatistiken bereitstellen. Fehlende Statistik-
+    stunden verhindern eine Erhoehung; die Reservepruefung nutzt last_changed.
   domain: automation
   input:
     battery_soc:
@@ -112,84 +112,76 @@ actions:
       history_end_ts: "{{ as_timestamp(now()) | int }}"
       history_start_ts: "{{ (as_timestamp(now()) - (long_days | int) * 86400) | int }}"
       short_start_ts: "{{ (as_timestamp(now()) - (short_hours | int) * 3600) | int }}"
-  - action: sql.query
+      statistics_start_ts: "{{ (as_timestamp(now()) - ([short_hours | int, (long_days | int) * 24] | max + 2) * 3600) | int }}"
+  - action: recorder.get_statistics
     data:
-      query: >-
-        SELECT
-          MAX(CASE WHEN s.last_updated_ts >= {{ short_start_ts | int }}
-              THEN CAST(s.state AS DECIMAL(10,3)) END) AS short_max,
-          MIN(CASE WHEN s.last_updated_ts >= {{ short_start_ts | int }}
-              THEN CAST(s.state AS DECIMAL(10,3)) END) AS short_min,
-          MAX(CAST(s.state AS DECIMAL(10,3))) AS long_max,
-          MIN(s.last_updated_ts) AS first_sample
-          {% for day in range(long_days | int) %}
-          ,MAX(CASE WHEN s.last_updated_ts >= {{ (history_end_ts | int) - (day + 1) * 86400 }}
-              AND s.last_updated_ts < {{ (history_end_ts | int) - day * 86400 }}
-              AND CAST(s.state AS DECIMAL(10,3)) <= {{ current_reserve | float }}
-              THEN 1 ELSE 0 END) AS min_day_{{ day }}
-          {% endfor %}
-        FROM states s
-        JOIN states_meta m ON s.metadata_id = m.metadata_id
-        WHERE m.entity_id = '{{ soc_entity }}'
-          AND s.last_updated_ts >= {{ history_start_ts | int }}
-          AND s.last_updated_ts <= {{ history_end_ts | int }}
-          AND s.state NOT IN ('unknown', 'unavailable', 'none', '', '.')
-          AND (
-            CAST(s.state AS DECIMAL(10,3)) BETWEEN 0.001 AND 100
-            OR s.state IN ('0', '0.0', '0.00', '0.000')
-          )
-    response_variable: soc_history
-  - action: sql.query
-    data:
-      query: >-
-        SELECT
-          COUNT(*) AS changes,
-          (SELECT CAST(p.state AS DECIMAL(10,3))
-           FROM states p
-           JOIN states_meta pm ON pm.metadata_id = p.metadata_id
-           WHERE pm.entity_id = '{{ reserve_entity }}'
-             AND p.last_updated_ts < {{ history_start_ts | int }}
-             AND p.state NOT IN ('unknown', 'unavailable', '')
-           ORDER BY p.last_updated_ts DESC, p.state_id DESC
-           LIMIT 1) AS initial_reserve
-        FROM states s
-        JOIN states_meta m ON m.metadata_id = s.metadata_id
-        WHERE m.entity_id = '{{ reserve_entity }}'
-          AND s.last_updated_ts >= {{ history_start_ts | int }}
-          AND s.last_updated_ts <= {{ history_end_ts | int }}
-          AND s.state NOT IN ('unknown', 'unavailable', '')
-          AND CAST(s.state AS DECIMAL(10,3)) <> {{ current_reserve | float }}
-    response_variable: reserve_history
+      statistic_ids:
+        - "{{ soc_entity }}"
+      start_time: "{{ (statistics_start_ts | int) | timestamp_local }}"
+      end_time: "{{ now().isoformat() }}"
+      period: hour
+      types:
+        - min
+        - max
+    response_variable: soc_statistics
   - variables:
+      stats_rows: "{{ soc_statistics.get('statistics', {}).get(soc_entity, []) }}"
       short_max: >-
-        {% set rows = soc_history.get('result', []) %}
-        {{ rows[0].get('short_max') | float(-1) if rows | count else -1 }}
+        {% set ns = namespace(v=-1) %}
+        {% for r in stats_rows %}
+          {% if as_timestamp(r.get('end'), 0) > short_start_ts | int
+                and as_timestamp(r.get('start'), 0) <= history_end_ts | int
+                and r.get('max') is not none %}
+            {% set ns.v = [ns.v, r.get('max') | float(-1)] | max %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.v }}
       short_min: >-
-        {% set rows = soc_history.get('result', []) %}
-        {{ rows[0].get('short_min') | float(101) if rows | count else 101 }}
+        {% set ns = namespace(v=101) %}
+        {% for r in stats_rows %}
+          {% if as_timestamp(r.get('end'), 0) > short_start_ts | int
+                and as_timestamp(r.get('start'), 0) <= history_end_ts | int
+                and r.get('min') is not none %}
+            {% set ns.v = [ns.v, r.get('min') | float(101)] | min %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.v }}
       long_max: >-
-        {% set rows = soc_history.get('result', []) %}
-        {{ rows[0].get('long_max') | float(-1) if rows | count else -1 }}
+        {% set ns = namespace(v=-1) %}
+        {% for r in stats_rows %}
+          {% if as_timestamp(r.get('end'), 0) > history_start_ts | int
+                and as_timestamp(r.get('start'), 0) <= history_end_ts | int
+                and r.get('max') is not none %}
+            {% set ns.v = [ns.v, r.get('max') | float(-1)] | max %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.v }}
       all_days_minimum: >-
-        {% set rows = soc_history.get('result', []) %}
-        {% set ns = namespace(ok=rows | count > 0) %}
-        {% if rows | count > 0 %}
-          {% for day in range(long_days | int) %}
-            {% if rows[0].get('min_day_' ~ day, 0) | int(0) != 1 %}
-              {% set ns.ok = false %}
+        {% set ns = namespace(ok=true) %}
+        {% for day in range(long_days | int) %}
+          {% set d = namespace(found=false, hours=0) %}
+          {% set bucket_start = (history_end_ts | int) - (day + 1) * 86400 %}
+          {% set bucket_end = (history_end_ts | int) - day * 86400 %}
+          {% for r in stats_rows %}
+            {% set start = as_timestamp(r.get('start'), 0) %}
+            {% set end = as_timestamp(r.get('end'), 0) %}
+            {% if end > bucket_start and start < bucket_end
+                  and r.get('min') is not none and r.get('max') is not none %}
+              {% set d.hours = d.hours + 1 %}
+              {% if r.get('min') | float(101) <= current_reserve | float %}
+                {% set d.found = true %}
+              {% endif %}
             {% endif %}
           {% endfor %}
-        {% endif %}
+          {% if not d.found or d.hours < 23 %}
+            {% set ns.ok = false %}
+          {% endif %}
+        {% endfor %}
         {{ ns.ok }}
-      first_sample: >-
-        {% set rows = soc_history.get('result', []) %}
-        {{ rows[0].get('first_sample') | float(0) if rows | count else 0 }}
-      initial_reserve: >-
-        {% set rows = reserve_history.get('result', []) %}
-        {{ rows[0].get('initial_reserve') | float(-1) if rows | count else -1 }}
-      reserve_changes: >-
-        {% set rows = reserve_history.get('result', []) %}
-        {{ rows[0].get('changes') | int(999) if rows | count else 999 }}
+      reserve_unchanged: >-
+        {% set reserve_state = states.get(reserve_entity) %}
+        {{ reserve_state is not none
+           and as_timestamp(reserve_state.last_changed, 0) <= history_start_ts | int }}
   - choose:
       - conditions:
           - condition: template
@@ -214,9 +206,7 @@ actions:
               {{ long_max | float(-1) >= 0
                  and long_max | float(-1) < 100
                  and all_days_minimum | bool(false)
-                 and first_sample | float(0) <= as_timestamp(now()) - (long_days | int) * 86400 + 3600
-                 and reserve_changes | int(999) == 0
-                 and initial_reserve | float(-1) == current_reserve | float }}
+                 and reserve_unchanged | bool(false) }}
         sequence:
           - variables:
               desired_reserve: >-
