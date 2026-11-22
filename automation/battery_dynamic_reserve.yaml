@@ -179,9 +179,8 @@ actions:
         {% endfor %}
         {{ ns.ok }}
       reserve_unchanged: >-
-        {% set reserve_state = states.get(reserve_entity) %}
-        {{ reserve_state is not none
-           and as_timestamp(reserve_state.last_changed, 0) <= history_start_ts | int }}
+        {{ has_value(reserve_entity)
+           and as_timestamp(states[reserve_entity].last_changed, 0) <= history_start_ts | int }}
   - choose:
       - conditions:
           - condition: template
